@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/Card'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { Tooltip } from '@/components/ui/Tooltip'
 import HexCanvas from '@/components/HexCanvas'
+import { useAuth } from '@/lib/auth'
 
 const PF = "'Playfair Display', serif"
 const IN = 'Inter, sans-serif'
@@ -458,6 +459,187 @@ function FillRateTable({ rows }: { rows: FillRateRow[] }) {
   )
 }
 
+// ─── toxicity feed ────────────────────────────────────────────────────────────
+
+const WS_BASE = (process.env.NEXT_PUBLIC_WS_URL ?? 'wss://vela-engine.fly.dev/ws').replace(/\/ws$/, '')
+const TOXICITY_WINDOW = 120
+
+interface ToxicityPoint {
+  ts: number
+  score: number
+  side: string
+}
+
+type ToxicityStatus = 'idle' | 'connecting' | 'authenticating' | 'streaming' | 'error'
+
+function ToxicityChart({ points }: { points: ToxicityPoint[] }) {
+  const W = 600
+  const H = 120
+  const PAD = { top: 12, right: 12, bottom: 28, left: 40 }
+  const innerW = W - PAD.left - PAD.right
+  const innerH = H - PAD.top - PAD.bottom
+  const bottomY = PAD.top + innerH
+  if (points.length < 2) {
+    return (
+      <div style={{ height: H }}>
+        <ChartEmpty label="Waiting for fills…" />
+      </div>
+    )
+  }
+  const minTs = points[0]!.ts
+  const maxTs = points[points.length - 1]!.ts
+  const tsRange = maxTs - minTs || 1
+  const toX = (ts: number) => PAD.left + ((ts - minTs) / tsRange) * innerW
+  const toY = (s: number) => PAD.top + innerH - s * innerH
+  const linePoints = points.map((p) => `${toX(p.ts)},${toY(p.score)}`).join(' ')
+  const thresholdY = toY(0.75)
+  const yLabels = [0, 0.25, 0.5, 0.75, 1.0]
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" width="100%" height={H}>
+      {[0.25, 0.5, 0.75].map((f) => (
+        <line key={f} x1={PAD.left} y1={PAD.top + innerH * (1 - f)} x2={PAD.left + innerW} y2={PAD.top + innerH * (1 - f)}
+          stroke="rgba(232,228,216,0.04)" strokeWidth="0.5" strokeDasharray="3 3" />
+      ))}
+      <line x1={PAD.left} y1={thresholdY} x2={PAD.left + innerW} y2={thresholdY}
+        stroke="rgba(204,51,51,0.3)" strokeWidth="1" strokeDasharray="4 3" />
+      <text x={PAD.left + innerW - 2} y={thresholdY - 3} textAnchor="end" fontSize="8" fill="rgba(204,51,51,0.5)" fontFamily="Courier New, monospace">0.75 threshold</text>
+      <polyline points={linePoints} fill="none" stroke="rgba(232,228,216,0.7)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+      {points.map((p, i) => (
+        <circle key={i} cx={toX(p.ts)} cy={toY(p.score)} r="2.5"
+          fill={p.score > 0.75 ? '#CC3333' : p.score > 0.4 ? 'rgba(232,228,216,0.6)' : '#6B8A5A'} />
+      ))}
+      {yLabels.map((v) => (
+        <text key={v} x={PAD.left - 5} y={toY(v) + 3} textAnchor="end" fontSize="8.5"
+          fill="rgba(232,228,216,0.35)" fontFamily="Courier New, monospace">{v.toFixed(2)}</text>
+      ))}
+      <line x1={PAD.left} y1={PAD.top} x2={PAD.left} y2={bottomY} stroke="rgba(232,228,216,0.06)" strokeWidth="0.5" />
+      <line x1={PAD.left} y1={bottomY} x2={PAD.left + innerW} y2={bottomY} stroke="rgba(232,228,216,0.06)" strokeWidth="0.5" />
+    </svg>
+  )
+}
+
+function ToxicityFeedPanel({ market }: { market: string | null }) {
+  const { address } = useAuth()
+  const [points, setPoints] = useState<ToxicityPoint[]>([])
+  const [status, setStatus] = useState<ToxicityStatus>('idle')
+  const wsRef = useRef<WebSocket | null>(null)
+  const statusRef = useRef<ToxicityStatus>('idle')
+
+  useEffect(() => {
+    statusRef.current = status
+  }, [status])
+
+  useEffect(() => {
+    if (!address) {
+      setStatus('idle')
+      wsRef.current?.close()
+      return
+    }
+
+    const url = market
+      ? `${WS_BASE}/feed/toxicity?market=${encodeURIComponent(market)}`
+      : `${WS_BASE}/feed/toxicity`
+
+    setStatus('connecting')
+    setPoints([])
+    const ws = new WebSocket(url)
+    wsRef.current = ws
+
+    ws.onmessage = async (e: MessageEvent) => {
+      let msg: Record<string, unknown>
+      try { msg = JSON.parse(e.data as string) as Record<string, unknown> } catch { return }
+
+      if (msg['type'] === 'challenge') {
+        setStatus('authenticating')
+        const nonce = msg['nonce'] as string
+        try {
+          const message = `vela:auth:${nonce}`
+          const signature = (await window.ethereum!.request({
+            method: 'personal_sign',
+            params: [message, address],
+          })) as string
+          ws.send(JSON.stringify({ type: 'auth', address, signature, nonce }))
+        } catch {
+          setStatus('error')
+          ws.close()
+        }
+      } else if (msg['type'] === 'authenticated') {
+        setStatus('streaming')
+      } else if (msg['type'] === 'error') {
+        setStatus('error')
+        ws.close()
+      } else if (typeof msg['toxicity_score'] === 'number') {
+        const pt: ToxicityPoint = {
+          ts: Date.now(),
+          score: msg['toxicity_score'] as number,
+          side: (msg['side'] as string) ?? 'bid',
+        }
+        setPoints((prev) => [...prev, pt].slice(-TOXICITY_WINDOW))
+      }
+    }
+
+    ws.onerror = () => setStatus('error')
+    ws.onclose = () => {
+      if (statusRef.current !== 'error') setStatus('idle')
+    }
+
+    return () => {
+      ws.close()
+      wsRef.current = null
+    }
+  }, [address, market])
+
+  const lastPoint = points[points.length - 1] ?? null
+  const highCount = points.filter((p) => p.score > 0.75).length
+
+  const statusBadge = () => {
+    if (status === 'streaming') return <Badge variant="success" dot size="sm">Live</Badge>
+    if (status === 'connecting' || status === 'authenticating') return <Badge variant="warning" size="sm">{status === 'authenticating' ? 'Authenticating…' : 'Connecting…'}</Badge>
+    if (status === 'error') return <Badge variant="error" size="sm">Error</Badge>
+    return null
+  }
+
+  return (
+    <Card padding="none">
+      <div className="px-5 py-3 border-b border-border flex items-center justify-between">
+        <span className="text-[0.65rem] font-medium text-brown uppercase tracking-[0.15em]">
+          Toxicity Score Feed{market ? ` — ${market}` : ''}
+        </span>
+        <div className="flex items-center gap-3">
+          {statusBadge()}
+          {lastPoint !== null && (
+            <span className={['text-xs font-mono tabular-nums font-semibold', lastPoint.score > 0.75 ? 'text-terra' : lastPoint.score > 0.4 ? 'text-ink' : 'text-sage'].join(' ')}>
+              {lastPoint.score.toFixed(3)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {!address ? (
+        <div className="px-5 py-6 text-xs text-brown text-center">
+          Connect wallet to view the toxicity feed
+        </div>
+      ) : (
+        <>
+          <div className="px-2 py-2">
+            <ToxicityChart points={points} />
+          </div>
+          {points.length > 0 && (
+            <div className="px-5 pb-3 flex items-center gap-6 text-[10px] text-brown">
+              <span>
+                <span className="text-terra font-semibold">{highCount}</span> / {points.length} fills above 0.75 threshold
+              </span>
+              <span className="text-[9px] text-brown opacity-50 uppercase tracking-wider">
+                Last {TOXICITY_WINDOW} fills · ws:/feed/toxicity
+              </span>
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+  )
+}
+
 export default function AnalyticsPage() {
   // ── new: analytics API state ───────────────────────────────────────────────
   const [analyticsMarkets, setAnalyticsMarkets] = useState<AnalyticsMarket[] | null>(null)
@@ -829,6 +1011,10 @@ export default function AnalyticsPage() {
               </div>
               <div className="px-2 py-2"><DepthChart depth={selectedDepth} /></div>
             </Card>
+
+            <div className="mb-5">
+              <ToxicityFeedPanel market={state.selectedMarket} />
+            </div>
           </>
         )}
 

@@ -24,7 +24,7 @@ The Vela Exchange white paper is the authoritative reference for the system's ar
 
 Vela Exchange is a high-performance verifiable central limit order book (CLOB) spot exchange. The paper presents the complete design: a single-threaded Rust matching engine with microsecond latency, a novel market maker credit system for capital-efficient multi-market quoting, an optimistic-ZK verification layer for trustless state transition proofs, and a forced inclusion mechanism for anti-censorship guarantees.
 
-Benchmarks show 1.38 μs median match latency and 725,000 operations per second, representing a 5.8× throughput improvement over the Pulse baseline with a 73% reduction in p99.9 tail latency.
+Benchmarks show 0.71 μs median match latency (p99: 0.75 μs, p99.9: 1.83 μs) and 725,000 operations per second, representing an 11.2× latency improvement over the Pulse baseline with a 90% reduction in p99.9 tail latency. An adverse selection toxicity scorer runs on-path per taker fill with a fixed-size ring buffer OFI accumulator, adding sub-50 ns overhead at p50.
 
 ## Sections
 

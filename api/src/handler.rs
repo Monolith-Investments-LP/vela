@@ -147,6 +147,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/deposit", post(deposit_handler))
         .route("/force-include", post(force_include_handler))
         .route("/ws", get(ws_handler))
+        .route("/feed/toxicity", get(crate::toxicity_feed::handler))
         .route("/fees", get(list_fees))
         .route("/markets/:market_id/fees", get(get_market_fees))
         .route("/admin/fees", get(admin_fees_handler))

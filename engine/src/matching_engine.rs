@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use types::{
     AssetId, Balance, CancelOrderRequest, DepositRequest, ErrorCode, ErrorResponse, FeeConfig,
@@ -6,6 +7,7 @@ use types::{
     VelaError, WithdrawalRequest,
 };
 use crate::{DeltaBuffer, CreditSystem, OrderBook};
+use crate::ofi::{ToxicityScorer, TOXICITY_PENALTY_THRESHOLD, CREDIT_PENALTY_MULTIPLIER, CREDIT_PENALTY_DURATION_US};
 
 pub struct MatchingEngine {
     pub order_books: HashMap<MarketId, OrderBook>,
@@ -17,6 +19,9 @@ pub struct MatchingEngine {
     pub credit_system: CreditSystem,
     pub timestamp: Timestamp,
     next_order_id: OrderId,
+    /// Interior-mutable toxicity scorer; updated on every taker fill without
+    /// requiring &mut self in match_order (which is called from &self context).
+    toxicity_scorer: RefCell<ToxicityScorer>,
 }
 
 impl MatchingEngine {
@@ -31,6 +36,7 @@ impl MatchingEngine {
             credit_system: CreditSystem::new(default_credit_ratio),
             timestamp: 0,
             next_order_id: 1,
+            toxicity_scorer: RefCell::new(ToxicityScorer::new()),
         }
     }
 
@@ -84,8 +90,30 @@ impl MatchingEngine {
     fn process_post_order(&mut self, req: PostOrderRequest) -> Vec<Response> {
         let order_id = self.alloc_order_id();
         let mut delta = DeltaBuffer::new();
-        match self.try_post_order(req, order_id, &mut delta) {
+        // Bind result before match so the &self borrow from try_post_order
+        // is released before we take &mut self for penalty application and commit.
+        let result = self.try_post_order(req, order_id, &mut delta);
+        match result {
             Ok(responses) => {
+                // Apply credit penalties for any high-toxicity fills — must happen
+                // before delta.commit() so penalties are visible to subsequent orders
+                // in the same microsecond batch.
+                let mut penalized: HashSet<UserId> = HashSet::new();
+                for resp in &responses {
+                    if let Response::OrderFilled(fill) = resp {
+                        if fill.toxicity_score > TOXICITY_PENALTY_THRESHOLD
+                            && penalized.insert(fill.maker.clone())
+                        {
+                            self.credit_system.apply_penalty(
+                                fill.maker.clone(),
+                                CREDIT_PENALTY_MULTIPLIER,
+                                CREDIT_PENALTY_DURATION_US,
+                                self.timestamp,
+                            );
+                        }
+                    }
+                }
+                drop(penalized);
                 delta.commit(self);
                 responses
             }
@@ -104,14 +132,13 @@ impl MatchingEngine {
         order_notional: u64,
         delta: &mut DeltaBuffer,
     ) -> Vec<Response> {
-        let ratio = self.credit_system.ratio(user);
+        let ratio = self.credit_system.effective_ratio(user, self.timestamp);
         let max_quoted = (deposited as f64 * ratio) as u64;
 
         if meta.total_quoted_notional.saturating_add(order_notional) <= max_quoted {
             return vec![];
         }
 
-        // Collect open orders with timestamps for oldest-first cancellation
         let mut candidates: Vec<(Timestamp, OrderId, u64, MarketId, OrderSide, u64, u64, Option<String>)> =
             meta.open_order_ids.iter().filter_map(|&oid| {
                 for (mid, book) in &self.order_books {
@@ -214,6 +241,7 @@ impl MatchingEngine {
                 deposited,
                 meta.total_quoted_notional,
                 order_notional,
+                self.timestamp,
             )?;
         }
 
@@ -295,18 +323,27 @@ impl MatchingEngine {
             None => return Ok((vec![], vec![])),
         };
 
+        // Capture best opposing level depth at arrival time for the size-fraction component.
+        let top_depth: u64 = match order.side {
+            OrderSide::Bid => book.depth_asks(1).first().map(|(_, q)| *q).unwrap_or(0),
+            OrderSide::Ask => book.depth_bids(1).first().map(|(_, q)| *q).unwrap_or(0),
+        };
+
         let mut fills: Vec<Fill> = vec![];
         let mut taker_remaining = order.quantity;
         let mut locally_consumed: HashMap<OrderId, u64> = HashMap::new();
         let mut affected_makers: HashSet<UserId> = HashSet::new();
+        // Count distinct price levels that actually produced fills (no allocation).
+        let mut levels_with_fills: u32 = 0;
 
         let matchable: Vec<(u64, Vec<Order>)> = match order.side {
             OrderSide::Bid => book.matchable_asks(order.price),
             OrderSide::Ask => book.matchable_bids(order.price),
         };
 
-        'outer: for (fill_price, level_orders) in matchable {
-            for resting in &level_orders {
+        'outer: for (fill_price, level_orders) in &matchable {
+            let fills_before = fills.len();
+            for resting in level_orders {
                 if taker_remaining == 0 { break 'outer; }
                 if resting.user == order.user { continue; }
 
@@ -315,7 +352,7 @@ impl MatchingEngine {
                 if resting_remaining == 0 { continue; }
 
                 let fill_qty = taker_remaining.min(resting_remaining);
-                let fill_notional = CreditSystem::compute_notional(fill_price, fill_qty);
+                let fill_notional = CreditSystem::compute_notional(*fill_price, fill_qty);
 
                 let taker_fee = (fill_notional as i64 * market.taker_fee_bps) / 10_000;
                 let maker_fee = (fill_notional as i64 * market.maker_fee_bps) / 10_000;
@@ -327,11 +364,14 @@ impl MatchingEngine {
                     taker: order.user.clone(),
                     market: order.market.clone(),
                     side: order.side,
-                    price: fill_price,
+                    price: *fill_price,
                     quantity: fill_qty,
                     maker_fee,
                     taker_fee,
                     timestamp: self.timestamp,
+                    // Populated below after scoring.
+                    toxicity_score: 0.0,
+                    ofi_snapshot: 0,
                 };
 
                 self.apply_fill_balances(&fill, market, delta);
@@ -369,7 +409,35 @@ impl MatchingEngine {
                 taker_remaining -= fill_qty;
                 fills.push(fill);
             }
+            // Track levels that produced at least one fill (no allocation).
+            if fills.len() > fills_before {
+                levels_with_fills += 1;
+            }
         }
+
+        // ── Toxicity scoring ────────────────────────────────────────────────────
+        // Completed before delta.commit() so it's part of the same logical batch.
+        // Uses RefCell interior mutability to avoid requiring &mut self here.
+        let total_fill_qty: u64 = fills.iter().map(|f| f.quantity).sum();
+        if total_fill_qty > 0 {
+            let signed_qty: i64 = match order.side {
+                OrderSide::Bid =>  total_fill_qty as i64,
+                OrderSide::Ask => -(total_fill_qty as i64),
+            };
+            let walked_book = levels_with_fills > 1;
+            let (score, ofi_snap) = self.toxicity_scorer.borrow_mut().score_and_update(
+                &order.market,
+                signed_qty,
+                top_depth,
+                total_fill_qty,
+                walked_book,
+            );
+            for fill in &mut fills {
+                fill.toxicity_score = score;
+                fill.ofi_snapshot = ofi_snap;
+            }
+        }
+        // ────────────────────────────────────────────────────────────────────────
 
         let mut auto_canceled: Vec<OrderCanceledResponse> = vec![];
 
@@ -401,6 +469,7 @@ impl MatchingEngine {
                     maker_deposited,
                     maker_meta.total_quoted_notional,
                     &open_orders,
+                    self.timestamp,
                 );
 
                 for oid in to_cancel {
@@ -472,7 +541,6 @@ impl MatchingEngine {
             }
         }
 
-        // net = taker_fee - abs(maker_fee); when maker_fee<0, taker_fee+maker_fee = taker_fee - abs(maker_fee)
         let net_exchange_fee = fill.taker_fee + fill.maker_fee;
         delta.add_exchange_fee(&market.quote.0, net_exchange_fee);
 

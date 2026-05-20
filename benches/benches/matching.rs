@@ -715,6 +715,9 @@ fn bench_component_breakdown(c: &mut Criterion) {
             credit_ratio: 1.0,
             total_quoted_notional: 0,
             actual_collateral: 0,
+            ref_by: None,
+            ref_earnings: 0,
+            referred_users: vec![],
         };
         // Fill the nonce window to simulate steady-state.
         for i in 1..=20u64 { meta.nonce_window.accept(i); }
@@ -746,6 +749,9 @@ fn bench_component_breakdown(c: &mut Criterion) {
                 credit_ratio: 1.0,
                 total_quoted_notional: 0,
                 actual_collateral: 0,
+                ref_by: None,
+                ref_earnings: 0,
+                referred_users: vec![],
             }));
             cow.commit(&mut balances, &mut metadata, &mut black_box(order_books.clone()));
         })

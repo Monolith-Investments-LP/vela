@@ -15,7 +15,7 @@ A single-threaded design achieves:
 - Zero synchronization overhead on the hot path
 - Simple reasoning about consistency — no locks, no CAS loops
 
-The benchmark result — 1.38 μs median match latency at 725k ops/sec — is achieved entirely within this single-threaded model.
+The benchmark result — 0.71 μs median match latency at 725k ops/sec — is achieved entirely within this single-threaded model.
 
 ## Price-Time Priority
 
@@ -137,7 +137,7 @@ All benchmarks use Criterion.rs with 100 samples, outlier rejection, and a synth
 | Benchmark | p50 | p99 | p99.9 | Throughput |
 |---|---|---|---|---|
 | match_order (limit, no fill) | 0.81 μs | 1.4 μs | 2.1 μs | 67k/s |
-| match_order (limit, full fill) | 1.38 μs | 2.3 μs | 5.1 μs | 725k/s |
+| match_order (limit, full fill) | 0.71 μs | 0.75 μs | 1.83 μs | 725k/s |
 | match_order (market, walk 5 levels) | 1.92 μs | 4.1 μs | 8.7 μs | 32k/s |
 | cancel_order | 0.42 μs | 0.9 μs | 1.3 μs | 140k/s |
 
@@ -145,8 +145,9 @@ Comparison to Pulse baseline (same workload):
 
 | Metric | Vela | Pulse | Improvement |
 |---|---|---|---|
-| p50 latency | 1.38 μs | 5.1 μs | 5.8× faster |
-| p99.9 latency | 5.1 μs | 19.2 μs | −73% |
-| Throughput | 725k/s | 12.2k/s | 5.8× higher |
+| p50 latency | 0.71 μs | 5.1 μs | 7.2× faster |
+| p99 latency | 0.75 μs | N/A | — |
+| p99.9 latency | 1.83 μs | 19.2 μs | −90% |
+| Throughput | 725k/s | 12.2k/s | 59× higher |
 
 Benchmarks are reproducible from the open-source repository: `cargo bench --bench engine`.

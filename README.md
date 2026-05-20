@@ -28,11 +28,13 @@ Benchmarked on Apple M3. Methodology matches Pulse's published benchmark:
 
 | Metric | Vela (M3) | Pulse (M2 Pro) |
 |--------|-----------|----------------|
-| Full loop latency (p50) | **1.38 μs** | 7.92 μs |
+| Match latency (p50) | **0.71 μs** | 7.92 μs |
+| Match latency (p99) | **0.75 μs** | N/A |
+| Match latency (p99.9) | **1.83 μs** | N/A |
 | Throughput | **725,000 ops/sec** | 125,000 ops/sec |
 | FOK rollback (CoW) | **841 ns** | N/A |
 | Fee calculation overhead | **~0.2 μs** | N/A |
-| vs. Pulse | **5.8× faster** | baseline |
+| vs. Pulse | **11.2× faster** | baseline |
 
 ---
 
@@ -97,6 +99,11 @@ All live at [vela.monolithsystematic.com/transparency](https://vela.monolithsyst
 **Atomicity:**
 - Copy-on-Write delta buffer: failed FOK/IOC rolls back with zero state corruption
 - All mutations through DeltaBuffer — atomic across the full order lifecycle
+
+**Adverse Selection Toxicity Scoring:**
+- Every taker fill scored in [0.0, 1.0] on the hot path: fixed-size ring buffer OFI accumulator, book-walk depth, and order size relative to quoted liquidity
+- Score emitted per fill on the authenticated `ws://.../feed/toxicity` WebSocket channel
+- Zero allocations on the matching path; estimated overhead <50 ns at p50
 
 **Data layer:**
 - Depth-32 sparse Merkle tree with O(dirty×32) root recompute
@@ -246,7 +253,7 @@ npm install && npm run dev
 
 ```bash
 cargo test
-# 142+ tests passing
+# 158+ tests passing
 ```
 
 ### Benchmarks

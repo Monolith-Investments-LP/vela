@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use types::{Response, UserId};
 use crate::types::{WsEnvelope, WsServerMessage};
@@ -10,16 +11,20 @@ pub struct FeedManager {
     private_txs: HashMap<[u8; 20], broadcast::Sender<WsServerMessage>>,
     private_envelope_txs: HashMap<[u8; 20], broadcast::Sender<WsEnvelope>>,
     private_envelope_seqs: HashMap<[u8; 20], u64>,
+    /// Public authenticated channel for per-fill toxicity events.
+    pub toxicity_tx: broadcast::Sender<serde_json::Value>,
 }
 
 impl FeedManager {
     pub fn new() -> Self {
         let (public_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
+        let (toxicity_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
         FeedManager {
             public_tx,
             private_txs: HashMap::new(),
             private_envelope_txs: HashMap::new(),
             private_envelope_seqs: HashMap::new(),
+            toxicity_tx,
         }
     }
 
@@ -41,6 +46,11 @@ impl FeedManager {
             .subscribe()
     }
 
+    /// Returns a receiver for the toxicity event broadcast channel.
+    pub fn subscribe_toxicity(&self) -> broadcast::Receiver<serde_json::Value> {
+        self.toxicity_tx.subscribe()
+    }
+
     pub fn publish_public(&self, msg: WsServerMessage) {
         let _ = self.public_tx.send(msg);
     }
@@ -49,6 +59,11 @@ impl FeedManager {
         if let Some(tx) = self.private_txs.get(&user.0) {
             let _ = tx.send(msg);
         }
+    }
+
+    /// Broadcast a toxicity event to all authenticated subscribers.
+    pub fn publish_toxicity(&self, event: serde_json::Value) {
+        let _ = self.toxicity_tx.send(event);
     }
 
     fn next_account_seq(&mut self, user_bytes: [u8; 20]) -> u64 {
@@ -61,8 +76,8 @@ impl FeedManager {
         let address = format!("0x{}", hex::encode(user_bytes));
         let channel = format!("account:{}", address);
         let seq = self.next_account_seq(user_bytes);
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
         let envelope = WsEnvelope {
@@ -111,6 +126,23 @@ impl FeedManager {
                     });
                     self.send_account_envelope(fill.maker.0, "fill", fill_data.clone());
                     self.send_account_envelope(fill.taker.0, "fill", fill_data);
+
+                    // Emit toxicity event for every fill that was part of a matched
+                    // taker order.  Score of 0.0 means the fill was a resting order
+                    // that did not contribute to a scored taker order this session
+                    // (e.g., restored from snapshot) — we still emit it for completeness.
+                    let timestamp_ns = fill.timestamp.saturating_mul(1_000);
+                    let toxicity_event = serde_json::json!({
+                        "market": fill.market.0,
+                        "order_id": fill.taker_order_id,
+                        "side": format!("{:?}", fill.side).to_lowercase(),
+                        "size": fill.quantity.to_string(),
+                        "price": fill.price.to_string(),
+                        "toxicity_score": fill.toxicity_score,
+                        "ofi_snapshot": fill.ofi_snapshot,
+                        "timestamp_ns": timestamp_ns,
+                    });
+                    let _ = self.toxicity_tx.send(toxicity_event);
                 }
                 Response::OrderPosted(posted) => {
                     let msg = WsServerMessage::OrderUpdate {

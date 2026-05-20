@@ -6,6 +6,7 @@ pub mod handler;
 pub mod mm;
 pub mod rate_limit;
 pub mod snapshot;
+pub mod toxicity_feed;
 pub mod types;
 pub mod wal;
 pub mod ws;

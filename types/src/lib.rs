@@ -123,6 +123,13 @@ pub struct Fill {
     pub maker_fee: i64,
     pub taker_fee: i64,
     pub timestamp: Timestamp,
+    /// Adverse-selection toxicity score in [0.0, 1.0] for the taker order.
+    /// 0.0 for non-taker fills (e.g., resting orders posted without a match).
+    #[serde(default)]
+    pub toxicity_score: f64,
+    /// Signed OFI ring-buffer snapshot at the time the score was computed.
+    #[serde(default)]
+    pub ofi_snapshot: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
