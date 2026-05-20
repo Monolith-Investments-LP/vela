@@ -1,5 +1,6 @@
 pub mod anchor;
 pub mod auth;
+pub mod committee_handler;
 pub mod da;
 pub mod feeds;
 pub mod handler;
@@ -22,6 +23,8 @@ use rate_limit::RateLimiter;
 use crate::types::{AnchorRecord, Decision, Incident, RegisteredMM, StoredFill, StoredOrder, WsEnvelope};
 use zkvm::{BatchProof, ZkProver};
 use tee::{AttestationRecord, TeeAttester};
+use committee::ThresholdDecryptor;
+use crate::committee_handler::PendingEncryptedOrders;
 
 pub struct OrderChannelItem {
     pub req: ::types::PostOrderRequest,
@@ -64,6 +67,13 @@ pub struct AppState {
     pub attestations: Arc<Mutex<HashMap<u64, AttestationRecord>>>,
     pub attester: Arc<dyn TeeAttester>,
     pub wal: Arc<wal::Wal>,
+    // TEOB: threshold encrypted order book
+    pub pending_encrypted: PendingEncryptedOrders,
+    pub threshold_decryptor: Arc<Mutex<ThresholdDecryptor>>,
+    /// Per-node HMAC-SHA256 keys (node_index → 32-byte key).
+    pub committee_keys: HashMap<u8, [u8; 32]>,
+    pub committee_config: Arc<::types::CommitteeConfig>,
+    pub decryption_proofs: Arc<Mutex<Vec<::types::DecryptionProof>>>,
 }
 
 impl AppState {
@@ -78,6 +88,43 @@ impl AppState {
 
         let prover: Arc<dyn ZkProver> = Arc::new(zkvm::PlaceholderProver);
         let attester: Arc<dyn TeeAttester> = Arc::new(tee::PlaceholderAttester::new());
+
+        let (t, n) = committee::committee_config_from_env();
+
+        let committee_keys: HashMap<u8, [u8; 32]> = (0..n)
+            .filter_map(|i| {
+                let val = std::env::var(format!("VELA_COMMITTEE_KEY_{i}")).ok()?;
+                let bytes = hex::decode(val.strip_prefix("0x").unwrap_or(&val)).ok()?;
+                if bytes.len() != 32 {
+                    return None;
+                }
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&bytes);
+                Some((i, arr))
+            })
+            .collect();
+
+        let pub_key_bytes: [u8; 48] = std::env::var("VELA_COMMITTEE_PUBKEY")
+            .ok()
+            .and_then(|v| {
+                let b = hex::decode(v.strip_prefix("0x").unwrap_or(&v)).ok()?;
+                if b.len() != 48 { return None; }
+                let mut arr = [0u8; 48];
+                arr.copy_from_slice(&b);
+                Some(arr)
+            })
+            .unwrap_or([0u8; 48]);
+
+        let committee_config = Arc::new(::types::CommitteeConfig {
+            t,
+            n,
+            pub_key: ::types::G1Affine(pub_key_bytes),
+        });
+
+        let pending_encrypted = committee_handler::new_pending_queue();
+        let threshold_decryptor = Arc::new(Mutex::new(
+            committee::ThresholdDecryptor::new(t, n),
+        ));
 
         let state = Arc::new(AppState {
             engine: Arc::clone(&engine_arc),
@@ -114,11 +161,17 @@ impl AppState {
             attestations: Arc::new(Mutex::new(HashMap::new())),
             attester,
             wal,
+            pending_encrypted: Arc::clone(&pending_encrypted),
+            threshold_decryptor,
+            committee_keys,
+            committee_config,
+            decryption_proofs: Arc::new(Mutex::new(Vec::new())),
         });
 
         tokio::spawn(engine_order_task(order_rx, engine_arc));
         tokio::spawn(ws::run_background_task(Arc::clone(&state)));
         tokio::spawn(midnight_reset_task(Arc::clone(&state)));
+        tokio::spawn(committee_handler::eviction_task(pending_encrypted, Arc::clone(&state)));
 
         state
     }

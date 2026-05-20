@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use types::{AssetId, Balance, MarketId, Request, Timestamp, UserId, UserMetadata};
+use types::{AssetId, Balance, DecryptionProof, MarketId, Request, Timestamp, UserId, UserMetadata};
 
 #[derive(Debug, Clone)]
 pub struct CommitBatch {
@@ -9,6 +9,7 @@ pub struct CommitBatch {
     pub metadata: HashMap<UserId, UserMetadata>,
     pub requests: Vec<Request>,
     pub market_ids: Vec<MarketId>,
+    pub decryption_proofs: Vec<DecryptionProof>,
 }
 
 impl CommitBatch {
@@ -20,7 +21,7 @@ impl CommitBatch {
         requests: Vec<Request>,
         market_ids: Vec<MarketId>,
     ) -> Self {
-        CommitBatch { sequence, timestamp, balances, metadata, requests, market_ids }
+        CommitBatch { sequence, timestamp, balances, metadata, requests, market_ids, decryption_proofs: Vec::new() }
     }
 
     pub fn request_count(&self) -> usize {

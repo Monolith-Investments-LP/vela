@@ -9,3 +9,5 @@ perf.data.old
 .env
 /data/
 /snapshots/
+.vercel
+.env*.local

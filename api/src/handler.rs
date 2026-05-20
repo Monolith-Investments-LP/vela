@@ -176,6 +176,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/tee/stats", get(tee_stats_handler))
         .route("/attestations", get(attestations_list_handler))
         .route("/wal/stats", get(wal_stats_handler))
+        .route("/order/encrypted", post(crate::committee_handler::post_encrypted_order))
+        .route("/committee/share", post(crate::committee_handler::post_committee_share))
         .with_state(state)
         .layer(cors)
 }

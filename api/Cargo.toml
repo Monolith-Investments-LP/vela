@@ -14,6 +14,9 @@ types = { workspace = true }
 engine = { workspace = true }
 zkvm = { path = "../zkvm" }
 tee = { path = "../tee" }
+committee = { path = "../committee" }
+hmac = { workspace = true }
+sha2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

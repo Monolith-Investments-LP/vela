@@ -2,6 +2,138 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use thiserror::Error;
 
+// --------------------------------------------------------------------------
+// BLS12-381 / TEOB types
+// --------------------------------------------------------------------------
+
+mod hex_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub mod bytes48 {
+        use super::*;
+        pub fn serialize<S: Serializer>(b: &[u8; 48], s: S) -> Result<S::Ok, S::Error> {
+            s.serialize_str(&hex::encode(b))
+        }
+        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 48], D::Error> {
+            let s = String::deserialize(d)?;
+            let v = hex::decode(s.strip_prefix("0x").unwrap_or(&s))
+                .map_err(serde::de::Error::custom)?;
+            if v.len() != 48 {
+                return Err(serde::de::Error::custom("expected 48 bytes for G1Affine"));
+            }
+            let mut out = [0u8; 48];
+            out.copy_from_slice(&v);
+            Ok(out)
+        }
+    }
+
+    pub mod bytes32 {
+        use super::*;
+        pub fn serialize<S: Serializer>(b: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
+            s.serialize_str(&hex::encode(b))
+        }
+        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
+            let s = String::deserialize(d)?;
+            let v = hex::decode(s.strip_prefix("0x").unwrap_or(&s))
+                .map_err(serde::de::Error::custom)?;
+            if v.len() != 32 {
+                return Err(serde::de::Error::custom("expected 32 bytes"));
+            }
+            let mut out = [0u8; 32];
+            out.copy_from_slice(&v);
+            Ok(out)
+        }
+    }
+
+    pub mod bytes_vec {
+        use super::*;
+        pub fn serialize<S: Serializer>(b: &[u8], s: S) -> Result<S::Ok, S::Error> {
+            s.serialize_str(&hex::encode(b))
+        }
+        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+            let s = String::deserialize(d)?;
+            hex::decode(s.strip_prefix("0x").unwrap_or(&s)).map_err(serde::de::Error::custom)
+        }
+    }
+}
+
+/// Compressed BLS12-381 G1 affine point (48 bytes), hex-serialized.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct G1Affine(
+    #[serde(with = "hex_serde::bytes48")]
+    pub [u8; 48],
+);
+
+/// Partial decryption share from one committee node.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DecryptionShare {
+    pub node_index: u8,
+    pub point: G1Affine,
+}
+
+/// ElGamal hybrid-encrypted order.
+///
+/// - `r`: ephemeral G1 point `r*G`
+/// - `c`: ciphertext point `m*G + r*pk`  (m is a random key capsule)
+/// - `order_hash`: SHA3-256 commitment to the plaintext order bytes
+/// - `ciphertext`: order bytes XOR SHA3-CTR(SHA3-256(m*G))
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EncryptedOrder {
+    pub r: G1Affine,
+    pub c: G1Affine,
+    #[serde(with = "hex_serde::bytes32")]
+    pub order_hash: [u8; 32],
+    #[serde(with = "hex_serde::bytes_vec")]
+    pub ciphertext: Vec<u8>,
+}
+
+/// A threshold-decrypted order; a newtype over [`PostOrderRequest`].
+///
+/// After decryption the inner value can be submitted directly to the matching engine.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PlaintextOrder(pub PostOrderRequest);
+
+/// Proof that threshold decryption was performed correctly and honestly.
+///
+/// Attests:
+///   1. The [`EncryptedOrder`] was received at `t_recv_ms`.
+///   2. Threshold was met and decryption completed at `t_decrypt_ms`.
+///   3. `t_decrypt_ms >= t_recv_ms` (no pre-decryption).
+///   4. The plaintext hashes to `order_hash`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DecryptionProof {
+    #[serde(with = "hex_serde::bytes32")]
+    pub order_hash: [u8; 32],
+    /// Unix timestamp (ms) when the encrypted order was received by the sequencer.
+    pub t_recv_ms: u64,
+    /// Unix timestamp (ms) when the t-th share arrived and decryption completed.
+    pub t_decrypt_ms: u64,
+    /// Batch sequence number in which this order was included.
+    pub batch_seq: u64,
+    /// Pre-computed validity flag (set by the verifier; false = fraud proof triggered).
+    pub valid: bool,
+}
+
+impl DecryptionProof {
+    /// Returns `true` iff the proof is well-formed:
+    ///   - decryption did not precede submission
+    ///   - the `valid` field (hash match etc.) is set
+    pub fn is_valid(&self) -> bool {
+        self.valid && self.t_decrypt_ms >= self.t_recv_ms
+    }
+}
+
+/// Committee configuration (public parameters only — no secret material).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommitteeConfig {
+    /// Minimum number of shares required for decryption.
+    pub t: u8,
+    /// Total number of committee nodes.
+    pub n: u8,
+    /// Group public key (shared by all nodes).
+    pub pub_key: G1Affine,
+}
+
 pub type Price = u64;
 pub type Quantity = u64;
 pub type OrderId = u64;
