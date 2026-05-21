@@ -8,19 +8,20 @@ import HeroOrderBook from '@/components/HeroOrderBook'
 const PF = "var(--font-playfair), 'Playfair Display', serif"
 const IN = "var(--font-inter-sans), 'Inter', sans-serif"
 
-const STATS = [
+const STATS: { num: string; label: string; sub: string; comparison?: string }[] = [
   {
-    num: '0.68 μs',
+    num: '0.38 μs',
     label: 'MATCH LATENCY',
     sub: 'p50, Apple M3, release build',
   },
   {
-    num: '1.43M',
+    num: '2.5M',
     label: 'OPERATIONS / SECOND',
     sub: 'Realistic MM workload, 98% cancel / 2% fill',
+    comparison: "vs. Hyperliquid's 200k ops/sec execution ceiling¹",
   },
   {
-    num: '11.6×',
+    num: '20.8×',
     label: 'FASTER THAN PULSE',
     sub: 'Per-operation vs. the leading open-source DEX',
   },
@@ -278,10 +279,37 @@ export default function HomePage() {
                 >
                   {stat.sub}
                 </div>
+                {stat.comparison && (
+                  <div
+                    style={{
+                      fontFamily: IN,
+                      fontSize: '10px',
+                      color: 'rgba(12,12,12,0.38)',
+                      marginTop: '7px',
+                      paddingTop: '7px',
+                      borderTop: '1px solid rgba(12,12,12,0.07)',
+                    }}
+                  >
+                    {stat.comparison}
+                  </div>
+                )}
               </div>
             ))}
           </div>
         </div>
+        <p
+          style={{
+            fontFamily: IN,
+            fontSize: '10px',
+            color: 'rgba(12,12,12,0.3)',
+            marginTop: '20px',
+            lineHeight: 1.6,
+          }}
+        >
+          ¹ Hyperliquid figure is a published design ceiling for the execution layer. See{' '}
+          <a href="https://github.com/arpjw/vela/blob/main/docs/benchmarks.md" style={{ color: 'rgba(12,12,12,0.45)', textDecoration: 'underline' }}>benchmarks</a>{' '}
+          for full methodology.
+        </p>
       </section>
 
       <section

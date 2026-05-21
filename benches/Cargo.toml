@@ -8,9 +8,26 @@ license.workspace = true
 [dev-dependencies]
 types = { workspace = true }
 engine = { workspace = true }
+api = { path = "../api" }
 criterion = { workspace = true }
 rand = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+k256 = { workspace = true }
+sha3 = { workspace = true }
+hex = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
 
 [[bench]]
 name = "matching"
+harness = false
+
+[[bench]]
+name = "e2e_http"
+harness = false
+
+[[bench]]
+name = "sustained_throughput"
 harness = false

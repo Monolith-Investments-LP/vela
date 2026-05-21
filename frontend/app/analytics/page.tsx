@@ -959,6 +959,35 @@ export default function AnalyticsPage() {
         <p style={{ fontFamily: IN, fontSize: '10px', color: 'rgba(12,12,12,0.35)', marginTop: '20px' }}>
           All analytics are computed from the live Vela order book and trade history. Methodology is open source at github.com/arpjw/vela.
         </p>
+
+        <div style={{ marginTop: '40px', paddingTop: '32px', borderTop: '1px solid rgba(12,12,12,0.07)' }}>
+          <p style={{ fontFamily: IN, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.2em', color: 'rgba(12,12,12,0.3)', marginBottom: '16px' }}>
+            Engine Performance Context
+          </p>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-[1px]" style={{ background: 'rgba(12,12,12,0.07)', marginBottom: '16px' }}>
+            <div style={{ background: 'white', padding: '24px' }}>
+              <p style={{ fontFamily: PF, fontWeight: 900, fontSize: '30px', color: '#0C0C0C', margin: '0 0 4px', lineHeight: 1 }}>2.5M ops/sec</p>
+              <p style={{ fontFamily: IN, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.15em', color: 'rgba(12,12,12,0.35)', margin: '0 0 8px' }}>
+                Vela engine throughput (isolated microbench)
+              </p>
+              <p style={{ fontFamily: IN, fontWeight: 300, fontSize: '11px', color: 'rgba(12,12,12,0.5)', margin: 0, lineHeight: 1.6 }}>
+                vs. Hyperliquid&apos;s 200k ops/sec execution ceiling¹
+              </p>
+            </div>
+            <div style={{ background: 'white', padding: '24px' }}>
+              <p style={{ fontFamily: PF, fontWeight: 900, fontSize: '30px', color: '#0C0C0C', margin: '0 0 4px', lineHeight: 1 }}>16.9 ms</p>
+              <p style={{ fontFamily: IN, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.15em', color: 'rgba(12,12,12,0.35)', margin: '0 0 8px' }}>
+                Vela end-to-end p50 (single client, loopback)
+              </p>
+              <p style={{ fontFamily: IN, fontWeight: 300, fontSize: '11px', color: 'rgba(12,12,12,0.5)', margin: 0, lineHeight: 1.6 }}>
+                vs. Hyperliquid&apos;s 200 ms p50 (colocated, includes HyperBFT consensus)¹
+              </p>
+            </div>
+          </div>
+          <p style={{ fontFamily: IN, fontSize: '10px', color: 'rgba(12,12,12,0.35)', lineHeight: 1.7 }}>
+            ¹ Vela engine benchmarks measure the isolated matching layer only (no network transit, no BFT consensus). Hyperliquid&apos;s published figures include HyperBFT consensus and network overhead for colocated clients. Vela does not currently have a consensus layer. End-to-end figures are in-process loopback measurements. Hyperliquid&apos;s 200k ops/sec ceiling is self-reported and execution-bottlenecked per their own documentation. All comparisons should be interpreted as execution-layer vs. execution-layer, not full-system vs. full-system.
+          </p>
+        </div>
       </div>
 
       {/* ── LIVE ANALYTICS (existing real-time sections) ─────────────────── */}

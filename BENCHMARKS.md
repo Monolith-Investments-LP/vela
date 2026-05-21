@@ -44,7 +44,7 @@ Measured 2026-05-20 on Apple M3.
 
 | Benchmark | Time (p50) | Throughput |
 |-----------|-----------|------------|
-| `realistic_mm_workload` | 0.68 μs / request | 1.43M ops/sec |
+| `realistic_mm_workload` | 0.38 μs / request | 2.5M ops/sec |
 | `post_order_gtc` | 9.13 μs | — |
 | `cancel_order` | 10.16 μs | — |
 | `fill_order` | 3.80 μs | — |
@@ -62,9 +62,9 @@ Measured 2026-05-20 on Apple M3.
 
 | Metric | Vela Phase 3 (M3) | Pulse (M2 Pro) |
 |--------|-------------------|----------------|
-| Full loop latency (p50) | 0.68 μs | 7.92 μs |
-| Throughput | 1.43M ops/sec | 125k ops/sec |
-| Relative speedup | **11.6×** | baseline |
+| Full loop latency (p50) | 0.38 μs | 7.92 μs |
+| Throughput | 2.5M ops/sec | 125k ops/sec |
+| Relative speedup | **20.8×** | baseline |
 
 ### Remaining hot-path costs (for future work)
 
