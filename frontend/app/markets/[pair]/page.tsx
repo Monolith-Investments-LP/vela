@@ -236,8 +236,8 @@ function TimeframeRow({ timeframe, onChange, isLive }: { timeframe: Timeframe; o
 }
 
 async function getChartCandles(pair: string, timeframe: string): Promise<CandlestickData<Time>[]> {
-  const { candles } = await fetchOHLCV(pair, timeframe, 200)
-  if (candles.length < 2) return []
+  const { candles, hasRealData } = await fetchOHLCV(pair, timeframe, 200)
+  if (!hasRealData || candles.length < 2) return []
   return candles.map((c) => ({
     time: c.time as Time,
     open: c.open,
@@ -347,27 +347,50 @@ function ChartArea({ pair, midPrice, timeframe, onLiveChange }: { pair: string; 
   }, [midPrice])
 
   useEffect(() => {
-    const ticker = setInterval(async () => {
-      if (!seriesRef.current) return
-      const tf = timeframeRef.current
-      const p = pairRef.current
-      const realCandles = await getChartCandles(p, tf)
-      if (realCandles.length < 2) return
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'https://vela-engine.fly.dev'
+    const wsBase = apiUrl.replace(/^https/, 'wss').replace(/^http(?!s)/, 'ws')
+    let ws: WebSocket | null = null
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let cancelled = false
 
-      const sorted = [...realCandles].sort((a, b) => (a.time as number) - (b.time as number))
-      const lastCandle = sorted[sorted.length - 1]
+    function connect() {
+      if (cancelled) return
+      ws = new WebSocket(`${wsBase}/feed/ohlcv/${pair}/${timeframe}`)
 
-      if (!isLiveRef.current) {
-        seriesRef.current.setData(sorted)
-        chartRef.current?.timeScale().fitContent()
-        isLiveRef.current = true
-        onLiveChange(true)
-      } else {
-        seriesRef.current.update(lastCandle)
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data as string)
+          const candle = msg?.data?.candle ?? msg?.candle
+          if (!candle || !seriesRef.current) return
+          seriesRef.current.update({
+            time: candle.time as Time,
+            open: candle.open,
+            high: candle.high,
+            low: candle.low,
+            close: candle.close,
+          })
+          if (!isLiveRef.current) {
+            isLiveRef.current = true
+            onLiveChange(true)
+          }
+        } catch { /* ignore malformed messages */ }
       }
-    }, 60_000)
-    return () => clearInterval(ticker)
-  }, [onLiveChange])
+
+      ws.onclose = () => {
+        if (!cancelled) {
+          reconnectTimer = setTimeout(connect, 5_000)
+        }
+      }
+    }
+
+    connect()
+
+    return () => {
+      cancelled = true
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      ws?.close()
+    }
+  }, [timeframe, pair, onLiveChange])
 
   return (
     <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>

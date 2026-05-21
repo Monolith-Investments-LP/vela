@@ -1,12 +1,13 @@
 use std::sync::Arc;
 use engine;
 use axum::{
-    extract::{Path, Query, State, WebSocketUpgrade},
+    extract::{Path, Query, State, WebSocketUpgrade, ws::{Message, WebSocket}},
     http::{HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
 };
+use futures_util::{SinkExt, StreamExt};
 use k256::ecdsa::SigningKey;
 use sha3::{Digest, Keccak256};
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -23,7 +24,7 @@ use crate::{
     types::{
         ApiResponse, BalanceResponse, BatchDetail, BatchSummary, BookLevel, BookResponse,
         CancelOrderBody, DepositBody, MarketResponse, OrderFillRecord, PostOrderBody,
-        StateRootData, StoredFill, StoredOrder, WithdrawBody, format_amount,
+        StateRootData, StoredFill, StoredOrder, WithdrawBody, WsEnvelope, format_amount,
     },
     wal,
     wal::{WalDeposit, WalFillCreated, WalOrderCancel, WalOrderPost, WalOrderProcessed, WalWithdrawalRequest},
@@ -149,6 +150,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/force-include", post(force_include_handler))
         .route("/ws", get(ws_handler))
         .route("/feed/toxicity", get(crate::toxicity_feed::handler))
+        .route("/feed/ohlcv/:market/:timeframe", get(ohlcv_feed_handler))
         .route("/fees", get(list_fees))
         .route("/markets/:market_id/fees", get(get_market_fees))
         .route("/admin/fees", get(admin_fees_handler))
@@ -488,6 +490,13 @@ async fn record_order_and_fills(
                 timestamp: f.timestamp,
                 side: side_to_str(f.side).to_string(),
             });
+            // Cap at 100k fills per market, evicting oldest first.
+            let market_count = fills_guard.iter().filter(|fill| fill.market_id == body.market).count();
+            if market_count > 100_000 {
+                if let Some(idx) = fills_guard.iter().position(|fill| fill.market_id == body.market) {
+                    fills_guard.remove(idx);
+                }
+            }
             let notional_micro = (f.price as u128 * f.quantity as u128 / 10_000_000_000u128) as u64;
             let taker_fee = notional_micro * 5 / 10000;
             let maker_rebate = notional_micro / 10000;
@@ -496,6 +505,66 @@ async fn record_order_and_fills(
             state.fees_collected_today.fetch_add(taker_fee, Ordering::Relaxed);
             state.total_taker_fees_collected.fetch_add(taker_fee, Ordering::Relaxed);
             state.total_maker_rebates_paid.fetch_add(maker_rebate, Ordering::Relaxed);
+        }
+
+        // Broadcast updated current candle for each timeframe after all fills are stored.
+        if !fill_pairs.is_empty() {
+            let ws_now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let last_ts = fill_pairs.iter().map(|(_, f)| f.timestamp).max().unwrap_or(0);
+            let ts_s = last_ts / 1_000_000;
+
+            const OHLCV_TIMEFRAMES: &[(&str, u64)] = &[
+                ("1m", 60), ("5m", 300), ("15m", 900),
+                ("1H", 3600), ("4H", 14400), ("1D", 86400),
+            ];
+            for &(tf_name, interval_secs) in OHLCV_TIMEFRAMES {
+                let bucket = (ts_s / interval_secs) * interval_secs;
+                let bucket_start_us = bucket * 1_000_000;
+                let bucket_end_us = (bucket + interval_secs) * 1_000_000;
+
+                let bucket_fills: Vec<_> = fills_guard.iter()
+                    .filter(|fill| fill.market_id == body.market
+                        && fill.timestamp >= bucket_start_us
+                        && fill.timestamp < bucket_end_us)
+                    .collect();
+
+                if bucket_fills.is_empty() { continue; }
+
+                let open = bucket_fills[0].price as f64 / 1_000_000.0;
+                let close = bucket_fills[bucket_fills.len() - 1].price as f64 / 1_000_000.0;
+                let high = bucket_fills.iter().map(|f| f.price).max().unwrap() as f64 / 1_000_000.0;
+                let low = bucket_fills.iter().map(|f| f.price).min().unwrap() as f64 / 1_000_000.0;
+                let volume = bucket_fills.iter().map(|f| f.quantity as f64).sum::<f64>() / 1_000_000.0;
+
+                let channel = format!("ohlcv:{}:{}", body.market, tf_name);
+                let seq = {
+                    let entry = state.ws_seqs.entry(channel.clone())
+                        .or_insert_with(|| std::sync::atomic::AtomicU64::new(0));
+                    entry.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+                };
+                let envelope = WsEnvelope {
+                    msg_type: "ohlcv".to_string(),
+                    channel,
+                    seq,
+                    data: serde_json::json!({
+                        "market": body.market,
+                        "timeframe": tf_name,
+                        "candle": {
+                            "time": bucket,
+                            "open": open,
+                            "high": high,
+                            "low": low,
+                            "close": close,
+                            "volume": volume,
+                        }
+                    }),
+                    timestamp: ws_now,
+                };
+                let _ = state.ws_tx.send(envelope);
+            }
         }
     }
 
@@ -1529,7 +1598,7 @@ struct OhlcvQuery {
     limit: Option<usize>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone)]
 struct OhlcvCandle {
     time: u64,
     open: f64,
@@ -1539,15 +1608,8 @@ struct OhlcvCandle {
     volume: f64,
 }
 
-async fn ohlcv_handler(
-    Path(market_id): Path<String>,
-    Query(query): Query<OhlcvQuery>,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    let timeframe = query.timeframe.as_deref().unwrap_or("1H");
-    let limit = query.limit.unwrap_or(100).min(500);
-
-    let interval_secs: u64 = match timeframe {
+fn timeframe_interval_secs(timeframe: &str) -> u64 {
+    match timeframe {
         "1m" => 60,
         "5m" => 300,
         "15m" => 900,
@@ -1555,7 +1617,58 @@ async fn ohlcv_handler(
         "4H" => 14400,
         "1D" => 86400,
         _ => 3600,
-    };
+    }
+}
+
+fn seed_price_for_market(market_id: &str) -> f64 {
+    match market_id.split('-').next().unwrap_or("") {
+        "BTC" => 65_000.0,
+        "ETH" => 3_500.0,
+        "SOL" => 150.0,
+        "AVAX" => 35.0,
+        "MATIC" => 1.0,
+        "LINK" => 15.0,
+        "UNI" => 10.0,
+        "ARB" => 1.2,
+        "OP" => 2.0,
+        "AAVE" => 90.0,
+        "DOGE" => 0.15,
+        _ => 100.0,
+    }
+}
+
+fn generate_simulated_candles(market_id: &str, interval_secs: u64, limit: usize) -> Vec<OhlcvCandle> {
+    let base_price = seed_price_for_market(market_id);
+    let now_s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let latest_bucket = (now_s / interval_secs) * interval_secs;
+    let count = limit.max(2);
+    let mut candles = Vec::with_capacity(count);
+    let mut price = base_price;
+    for i in 0..count {
+        let time = latest_bucket.saturating_sub(((count - 1 - i) as u64) * interval_secs);
+        let noise = ((i as f64 * 0.7 + 13.0).sin() * 0.003 + 0.0005) * price;
+        let open = price;
+        let close = price + noise;
+        let high = open.max(close) + noise.abs() * 0.3;
+        let low = open.min(close) - noise.abs() * 0.3;
+        let volume = base_price * 0.1 * (1.0 + (i as f64 * 0.3).sin().abs());
+        candles.push(OhlcvCandle { time, open, high, low, close, volume });
+        price = close;
+    }
+    candles
+}
+
+async fn ohlcv_handler(
+    Path(market_id): Path<String>,
+    Query(query): Query<OhlcvQuery>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let timeframe = query.timeframe.as_deref().unwrap_or("1H");
+    let limit = query.limit.unwrap_or(100).min(500);
+    let interval_secs = timeframe_interval_secs(timeframe);
 
     let fills = state.fills.lock().await;
     let mut market_fills: Vec<&StoredFill> = fills
@@ -1563,8 +1676,6 @@ async fn ohlcv_handler(
         .filter(|f| f.market_id == market_id)
         .collect();
     market_fills.sort_by_key(|f| f.timestamp);
-
-    let has_real_data = !market_fills.is_empty();
 
     let mut buckets: BTreeMap<u64, Vec<&StoredFill>> = BTreeMap::new();
     for fill in &market_fills {
@@ -1585,10 +1696,19 @@ async fn ohlcv_handler(
         })
         .collect();
 
-    candles.sort_by(|a, b| b.time.cmp(&a.time));
-    let count = candles.len().min(limit);
-    candles.truncate(limit);
+    // Sort ascending (most recent last), keep only the most recent `limit` candles.
+    candles.sort_by_key(|c| c.time);
+    if candles.len() > limit {
+        candles.drain(..candles.len() - limit);
+    }
 
+    let has_real_data = candles.len() >= 2;
+
+    if !has_real_data {
+        candles = generate_simulated_candles(&market_id, interval_secs, limit);
+    }
+
+    let count = candles.len();
     Json(ApiResponse::ok(serde_json::json!({
         "market_id": market_id,
         "timeframe": timeframe,
@@ -1596,6 +1716,94 @@ async fn ohlcv_handler(
         "count": count,
         "has_real_data": has_real_data,
     })))
+}
+
+async fn ohlcv_feed_handler(
+    Path((market, timeframe)): Path<(String, String)>,
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    ws.on_upgrade(move |socket| ohlcv_feed_ws(socket, market, timeframe, state))
+}
+
+async fn ohlcv_feed_ws(socket: WebSocket, market: String, timeframe: String, state: Arc<AppState>) {
+    let (mut sender, mut receiver) = socket.split();
+    let channel = format!("ohlcv:{}:{}", market, timeframe);
+    let interval_secs = timeframe_interval_secs(&timeframe);
+
+    // Send current candle snapshot on connect.
+    {
+        let now_s = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let bucket = (now_s / interval_secs) * interval_secs;
+        let bucket_start_us = bucket * 1_000_000;
+        let bucket_end_us = (bucket + interval_secs) * 1_000_000;
+
+        let fills = state.fills.lock().await;
+        let mut bucket_fills: Vec<_> = fills.iter()
+            .filter(|f| f.market_id == market
+                && f.timestamp >= bucket_start_us
+                && f.timestamp < bucket_end_us)
+            .collect();
+        bucket_fills.sort_by_key(|f| f.timestamp);
+
+        if !bucket_fills.is_empty() {
+            let open = bucket_fills[0].price as f64 / 1_000_000.0;
+            let close = bucket_fills[bucket_fills.len() - 1].price as f64 / 1_000_000.0;
+            let high = bucket_fills.iter().map(|f| f.price).max().unwrap() as f64 / 1_000_000.0;
+            let low = bucket_fills.iter().map(|f| f.price).min().unwrap() as f64 / 1_000_000.0;
+            let volume = bucket_fills.iter().map(|f| f.quantity as f64).sum::<f64>() / 1_000_000.0;
+            let snap = serde_json::json!({
+                "type": "ohlcv",
+                "channel": channel,
+                "data": {
+                    "market": market,
+                    "timeframe": timeframe,
+                    "candle": { "time": bucket, "open": open, "high": high, "low": low, "close": close, "volume": volume }
+                }
+            });
+            if sender.send(Message::Text(serde_json::to_string(&snap).unwrap_or_default())).await.is_err() {
+                return;
+            }
+        }
+    }
+
+    let mut ws_rx = state.ws_tx.subscribe();
+
+    loop {
+        tokio::select! {
+            msg = async {
+                loop {
+                    match ws_rx.recv().await {
+                        Ok(m) => break Some(m),
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break None,
+                    }
+                }
+            } => {
+                match msg {
+                    None => return,
+                    Some(envelope) if envelope.channel == channel => {
+                        let json = serde_json::to_string(&envelope).unwrap_or_default();
+                        if sender.send(Message::Text(json)).await.is_err() { return; }
+                    }
+                    Some(_) => {}
+                }
+            }
+
+            msg = receiver.next() => {
+                match msg {
+                    Some(Ok(Message::Ping(data))) => {
+                        let _ = sender.send(Message::Pong(data)).await;
+                    }
+                    Some(Ok(Message::Close(_))) | None => return,
+                    _ => {}
+                }
+            }
+        }
+    }
 }
 
 fn parse_decimal_amount(s: &str) -> Option<u64> {
