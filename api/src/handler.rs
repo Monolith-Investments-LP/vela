@@ -198,17 +198,31 @@ async fn ws_handler(
 
 async fn list_markets(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let engine = state.engine.lock().await;
-    let markets: Vec<MarketResponse> = engine.markets.values().map(|m| {
-        let book = engine.order_books.get(&m.id);
-        MarketResponse {
-            id: m.id.0.clone(),
-            base: m.base.as_str().to_string(),
-            quote: m.quote.as_str().to_string(),
-            best_bid: book.and_then(|b| b.best_bid()).map(|p| format_amount(p, PRICE_DECIMALS)),
-            best_ask: book.and_then(|b| b.best_ask()).map(|p| format_amount(p, PRICE_DECIMALS)),
-            spread: book.and_then(|b| b.spread()).map(|s| format_amount(s, PRICE_DECIMALS)),
-        }
-    }).collect();
+    let market_ids: Vec<_> = engine.markets.values().map(|m| (m.id.clone(), m.base, m.quote)).collect();
+    drop(engine);
+    let mut markets: Vec<MarketResponse> = Vec::with_capacity(market_ids.len());
+    for (market_id, base, quote) in market_ids {
+        let (best_bid, best_ask, spread) =
+            if let Some(shard_arc) = state.shards.shards.get(&market_id) {
+                let shard = shard_arc.lock().await;
+                let book = shard.engine.order_books.get(&market_id);
+                (
+                    book.and_then(|b| b.best_bid()).map(|p| format_amount(p, PRICE_DECIMALS)),
+                    book.and_then(|b| b.best_ask()).map(|p| format_amount(p, PRICE_DECIMALS)),
+                    book.and_then(|b| b.spread()).map(|s| format_amount(s, PRICE_DECIMALS)),
+                )
+            } else {
+                (None, None, None)
+            };
+        markets.push(MarketResponse {
+            id: market_id.0,
+            base: base.as_str().to_string(),
+            quote: quote.as_str().to_string(),
+            best_bid,
+            best_ask,
+            spread,
+        });
+    }
     Json(ApiResponse::ok(markets))
 }
 
@@ -216,19 +230,24 @@ async fn get_book(
     Path(market): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let engine = state.engine.lock().await;
     let market_id = MarketId(market.clone());
-    match engine.order_books.get(&market_id) {
-        Some(book) => {
-            let bids = book.depth_bids(50).iter().map(|(p, q)| BookLevel {
-                price: format_amount(*p, PRICE_DECIMALS),
-                quantity: format_amount(*q, QUANTITY_DECIMALS),
-            }).collect();
-            let asks = book.depth_asks(50).iter().map(|(p, q)| BookLevel {
-                price: format_amount(*p, PRICE_DECIMALS),
-                quantity: format_amount(*q, QUANTITY_DECIMALS),
-            }).collect();
-            (StatusCode::OK, Json(ApiResponse::ok(BookResponse { market, bids, asks }))).into_response()
+    match state.shards.shards.get(&market_id) {
+        Some(shard_arc) => {
+            let shard = shard_arc.lock().await;
+            match shard.engine.order_books.get(&market_id) {
+                Some(book) => {
+                    let bids = book.depth_bids(50).iter().map(|(p, q)| BookLevel {
+                        price: format_amount(*p, PRICE_DECIMALS),
+                        quantity: format_amount(*q, QUANTITY_DECIMALS),
+                    }).collect();
+                    let asks = book.depth_asks(50).iter().map(|(p, q)| BookLevel {
+                        price: format_amount(*p, PRICE_DECIMALS),
+                        quantity: format_amount(*q, QUANTITY_DECIMALS),
+                    }).collect();
+                    (StatusCode::OK, Json(ApiResponse::ok(BookResponse { market, bids, asks }))).into_response()
+                }
+                None => (StatusCode::NOT_FOUND, Json(ApiResponse::<()>::err("market not found"))).into_response(),
+            }
         }
         None => (StatusCode::NOT_FOUND, Json(ApiResponse::<()>::err("market not found"))).into_response(),
     }
@@ -242,8 +261,8 @@ async fn get_balances(
         Ok(u) => u,
         Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid address"))).into_response(),
     };
-    let engine = state.engine.lock().await;
-    let balances: Vec<BalanceResponse> = engine.balances.iter()
+    let us = state.shards.user_state.read().await;
+    let balances: Vec<BalanceResponse> = us.balances.iter()
         .filter(|((u, _), _)| u == &user)
         .map(|((_, asset), bal)| BalanceResponse {
             asset: asset.as_str().to_string(),
@@ -263,28 +282,33 @@ async fn get_open_orders(
         Ok(u) => u,
         Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid address"))).into_response(),
     };
-    let engine = state.engine.lock().await;
-    let meta = engine.metadata.get(&user);
-    let open_order_ids = meta.map(|m| m.iter_order_ids().collect::<Vec<_>>()).unwrap_or_default();
-    let orders: Vec<serde_json::Value> = engine.order_books.values()
-        .flat_map(|book| {
-            open_order_ids.iter().filter_map(|&id| {
-                book.get_order(id).map(|o| serde_json::json!({
-                    "id": o.id,
-                    "market": o.market.0,
-                    "side": format!("{:?}", o.side).to_lowercase(),
-                    "order_type": format!("{:?}", o.order_type).to_lowercase(),
-                    "price": format_amount(o.price, PRICE_DECIMALS),
-                    "quantity": format_amount(o.quantity, QUANTITY_DECIMALS),
-                    "filled_quantity": format_amount(o.filled_quantity, QUANTITY_DECIMALS),
-                    "status": format!("{:?}", o.status).to_lowercase(),
-                    "nonce": o.nonce,
-                    "client_order_id": o.client_order_id,
-                    "timestamp": o.timestamp,
-                }))
-            })
-        })
-        .collect();
+    let open_order_ids = {
+        let us = state.shards.user_state.read().await;
+        us.metadata.get(&user).map(|m| m.iter_order_ids().collect::<Vec<_>>()).unwrap_or_default()
+    };
+    let mut orders: Vec<serde_json::Value> = Vec::new();
+    for shard_arc in state.shards.shards.values() {
+        let shard = shard_arc.lock().await;
+        for book in shard.engine.order_books.values() {
+            for &id in &open_order_ids {
+                if let Some(o) = book.get_order(id) {
+                    orders.push(serde_json::json!({
+                        "id": o.id,
+                        "market": o.market.0,
+                        "side": format!("{:?}", o.side).to_lowercase(),
+                        "order_type": format!("{:?}", o.order_type).to_lowercase(),
+                        "price": format_amount(o.price, PRICE_DECIMALS),
+                        "quantity": format_amount(o.quantity, QUANTITY_DECIMALS),
+                        "filled_quantity": format_amount(o.filled_quantity, QUANTITY_DECIMALS),
+                        "status": format!("{:?}", o.status).to_lowercase(),
+                        "nonce": o.nonce,
+                        "client_order_id": o.client_order_id,
+                        "timestamp": o.timestamp,
+                    }));
+                }
+            }
+        }
+    }
     (StatusCode::OK, Json(ApiResponse::ok(orders))).into_response()
 }
 
@@ -297,15 +321,12 @@ async fn get_order_by_client_id(
         Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid address"))).into_response(),
     };
 
-    let engine = state.engine.lock().await;
-    let order_id = engine.order_books.values()
-        .find_map(|b| b.find_by_client_order_id(&user, &client_id));
-
-    match order_id {
-        Some(oid) => {
-            let order = engine.order_books.values().find_map(|b| b.get_order(oid));
-            match order {
-                Some(o) => (StatusCode::OK, Json(ApiResponse::ok(serde_json::json!({
+    let mut found_order = None;
+    'outer: for shard_arc in state.shards.shards.values() {
+        let shard = shard_arc.lock().await;
+        for book in shard.engine.order_books.values() {
+            if let Some(oid) = book.find_by_client_order_id(&user, &client_id) {
+                found_order = book.get_order(oid).map(|o| serde_json::json!({
                     "id": o.id,
                     "market": o.market.0,
                     "side": format!("{:?}", o.side).to_lowercase(),
@@ -317,10 +338,13 @@ async fn get_order_by_client_id(
                     "nonce": o.nonce,
                     "client_order_id": o.client_order_id,
                     "timestamp": o.timestamp,
-                })))).into_response(),
-                None => (StatusCode::NOT_FOUND, Json(ApiResponse::<()>::err("order not found"))).into_response(),
+                }));
+                break 'outer;
             }
         }
+    }
+    match found_order {
+        Some(o) => (StatusCode::OK, Json(ApiResponse::ok(o))).into_response(),
         None => (StatusCode::NOT_FOUND, Json(ApiResponse::<()>::err("order not found"))).into_response(),
     }
 }
@@ -797,14 +821,14 @@ async fn admin_reserves_handler(
         return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("unauthorized"))).into_response();
     }
 
-    let engine = state.engine.lock().await;
+    let us = state.shards.user_state.read().await;
 
     let mut engine_balances: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-    for ((_, asset), bal) in &engine.balances {
+    for ((_, asset), bal) in &us.balances {
         *engine_balances.entry(asset.as_str().to_string()).or_insert(0) += bal.total();
     }
 
-    let total_users = engine.metadata.len();
+    let total_users = us.metadata.len();
     let snapshot_time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1050,8 +1074,8 @@ async fn deposit_handler(
         tracing::error!("WAL DEPOSIT failed: {e}");
     }
 
-    let engine = state.engine.lock().await;
-    let balances: Vec<BalanceResponse> = engine.balances.iter()
+    let us = state.shards.user_state.read().await;
+    let balances: Vec<BalanceResponse> = us.balances.iter()
         .filter(|((u, _), _)| u == &user)
         .map(|((_, asset), bal)| BalanceResponse {
             asset: asset.as_str().to_string(),
@@ -1283,32 +1307,42 @@ async fn admin_state_handler(
         return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("unauthorized"))).into_response();
     }
 
-    let engine = state.engine.lock().await;
+    let (market_ids_bases_quotes, total_users, total_deposits, total_open_orders) = {
+        let engine = state.engine.lock().await;
+        let mids: Vec<_> = engine.markets.values().map(|m| (m.id.clone(), m.base, m.quote)).collect();
+        let us = state.shards.user_state.read().await;
+        let tu = us.metadata.len();
+        let td: Vec<serde_json::Value> = us.balances.iter().map(|((user, asset), bal)| {
+            serde_json::json!({
+                "user": format!("0x{}", hex::encode(user.0)),
+                "asset": asset.as_str(),
+                "amount": format_amount(bal.total(), 8),
+            })
+        }).collect();
+        let too: usize = us.metadata.values().map(|m| m.order_id_count()).sum();
+        (mids, tu, td, too)
+    };
 
-    let markets: Vec<serde_json::Value> = engine.markets.values().map(|m| {
-        let book = engine.order_books.get(&m.id);
-        serde_json::json!({
-            "id": m.id.0,
-            "base": m.base.as_str(),
-            "quote": m.quote.as_str(),
-            "best_bid": book.and_then(|b| b.best_bid()).map(|p| format_amount(p, PRICE_DECIMALS)),
-            "best_ask": book.and_then(|b| b.best_ask()).map(|p| format_amount(p, PRICE_DECIMALS)),
-        })
-    }).collect();
-
-    let total_users = engine.metadata.len();
-
-    let total_deposits: Vec<serde_json::Value> = engine.balances.iter().map(|((user, asset), bal)| {
-        serde_json::json!({
-            "user": format!("0x{}", hex::encode(user.0)),
-            "asset": asset.as_str(),
-            "amount": format_amount(bal.total(), 8),
-        })
-    }).collect();
-
-    let total_open_orders: usize = engine.metadata.values()
-        .map(|m| m.order_id_count())
-        .sum();
+    let mut markets: Vec<serde_json::Value> = Vec::new();
+    for (market_id, base, quote) in market_ids_bases_quotes {
+        let (best_bid, best_ask) = if let Some(shard_arc) = state.shards.shards.get(&market_id) {
+            let shard = shard_arc.lock().await;
+            let book = shard.engine.order_books.get(&market_id);
+            (
+                book.and_then(|b| b.best_bid()).map(|p| format_amount(p, PRICE_DECIMALS)),
+                book.and_then(|b| b.best_ask()).map(|p| format_amount(p, PRICE_DECIMALS)),
+            )
+        } else {
+            (None, None)
+        };
+        markets.push(serde_json::json!({
+            "id": market_id.0,
+            "base": base.as_str(),
+            "quote": quote.as_str(),
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+        }));
+    }
 
     let snapshot_path = {
         let dir = std::env::var("SNAPSHOT_DIR").unwrap_or_else(|_| "/data".to_string());
@@ -1559,10 +1593,12 @@ async fn get_batch(
 }
 
 async fn get_state_root(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let engine = state.engine.lock().await;
-    let order_count: usize = engine.metadata.values().map(|m| m.order_id_count()).sum();
-    let user_count = engine.metadata.len();
-    drop(engine);
+    let (order_count, user_count) = {
+        let us = state.shards.user_state.read().await;
+        let oc: usize = us.metadata.values().map(|m| m.order_id_count()).sum();
+        let uc = us.metadata.len();
+        (oc, uc)
+    };
 
     let fills = state.fills.lock().await;
     let fill_ids: Vec<String> = fills.iter().map(|f| f.id.clone()).collect();
@@ -1971,27 +2007,27 @@ async fn register_referral(
     if verify_matches_async(msg, body.signature.clone(), body.user.clone()).await.is_err() {
         return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("invalid signature"))).into_response();
     }
-    let mut engine = state.engine.lock().await;
-    let ref_exists = engine.metadata.contains_key(&ref_user)
-        || engine.balances.keys().any(|(u, _)| u == &ref_user);
+    let mut us = state.shards.user_state.write().await;
+    let ref_exists = us.metadata.contains_key(&ref_user)
+        || us.balances.keys().any(|(u, _)| u == &ref_user);
     if !ref_exists {
         return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("referrer not found"))).into_response();
     }
     {
-        let existing = engine.metadata.get(&user);
+        let existing = us.metadata.get(&user);
         if existing.map(|m| m.ref_by.is_some()).unwrap_or(false) {
             return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("referrer already set"))).into_response();
         }
     }
-    let mut user_meta = engine.metadata.get(&user).cloned().unwrap_or_else(|| default_user_metadata(&user));
+    let mut user_meta = us.metadata.get(&user).cloned().unwrap_or_else(|| default_user_metadata(&user));
     user_meta.ref_by = Some(body.referrer.to_lowercase());
-    engine.metadata.insert(user.clone(), user_meta);
-    let mut ref_meta = engine.metadata.get(&ref_user).cloned().unwrap_or_else(|| default_user_metadata(&ref_user));
+    us.metadata.insert(user.clone(), user_meta);
+    let mut ref_meta = us.metadata.get(&ref_user).cloned().unwrap_or_else(|| default_user_metadata(&ref_user));
     let user_hex = body.user.to_lowercase();
     if !ref_meta.referred_users.contains(&user_hex) {
         ref_meta.referred_users.push(user_hex);
     }
-    engine.metadata.insert(ref_user, ref_meta);
+    us.metadata.insert(ref_user, ref_meta);
     (StatusCode::OK, Json(ApiResponse::ok(serde_json::json!({"registered": true})))).into_response()
 }
 
@@ -2003,8 +2039,8 @@ async fn get_referral_handler(
         Ok(u) => u,
         Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid address"))).into_response(),
     };
-    let engine = state.engine.lock().await;
-    let meta = engine.metadata.get(&user).cloned().unwrap_or_else(|| default_user_metadata(&user));
+    let us = state.shards.user_state.read().await;
+    let meta = us.metadata.get(&user).cloned().unwrap_or_else(|| default_user_metadata(&user));
     let earnings_usdc = format!("{:.6}", meta.ref_earnings as f64 / 1_000_000.0);
     (StatusCode::OK, Json(ApiResponse::ok(serde_json::json!({
         "address": address.to_lowercase(),
@@ -2129,8 +2165,8 @@ async fn get_leaderboard(State(state): State<Arc<AppState>>) -> impl IntoRespons
         vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
     });
     traders.truncate(20);
-    let engine = state.engine.lock().await;
-    let mut referrers: Vec<serde_json::Value> = engine.metadata.iter()
+    let us = state.shards.user_state.read().await;
+    let mut referrers: Vec<serde_json::Value> = us.metadata.iter()
         .filter(|(_, m)| !m.referred_users.is_empty() || m.ref_earnings > 0)
         .map(|(user, m)| serde_json::json!({
             "address": user.to_hex(),
@@ -2454,27 +2490,53 @@ async fn build_analytics_data(
         .as_micros() as u64;
     let window_start = now_us.saturating_sub(window_us);
 
-    let engine = state.engine.lock().await;
-    let fills = state.fills.lock().await;
-
-    let mut market_ids: Vec<String> = if let Some(mid) = filter_market {
-        vec![mid.to_string()]
-    } else {
-        let mut ids: Vec<String> = engine.markets.keys().map(|k| k.0.clone()).collect();
-        ids.sort();
-        ids
+    // Collect market IDs from static engine config, then sample order books from shards.
+    let mut market_ids: Vec<String> = {
+        let engine = state.engine.lock().await;
+        if let Some(mid) = filter_market {
+            if engine.markets.contains_key(&MarketId(mid.to_string())) {
+                vec![mid.to_string()]
+            } else {
+                vec![]
+            }
+        } else {
+            let mut ids: Vec<String> = engine.markets.keys().map(|k| k.0.clone()).collect();
+            ids.sort();
+            ids
+        }
     };
-    market_ids.retain(|id| engine.markets.contains_key(&MarketId(id.clone())));
+    market_ids.retain(|id| state.shards.shards.contains_key(&MarketId(id.clone())));
+
+    // Pre-collect book snapshots per market (one shard lock at a time).
+    struct BookSnapshot {
+        best_bid: Option<u64>,
+        best_ask: Option<u64>,
+        asks_depth: Vec<(u64, u64)>,
+        bids_depth: Vec<(u64, u64)>,
+    }
+    let mut book_snaps: std::collections::HashMap<String, BookSnapshot> = std::collections::HashMap::new();
+    for market_id in &market_ids {
+        if let Some(shard_arc) = state.shards.shards.get(&MarketId(market_id.clone())) {
+            let shard = shard_arc.lock().await;
+            if let Some(book) = shard.engine.order_books.get(&MarketId(market_id.clone())) {
+                book_snaps.insert(market_id.clone(), BookSnapshot {
+                    best_bid: book.best_bid(),
+                    best_ask: book.best_ask(),
+                    asks_depth: book.depth_asks(500),
+                    bids_depth: book.depth_bids(500),
+                });
+            }
+        }
+    }
+
+    let fills = state.fills.lock().await;
 
     let mut markets = Vec::new();
 
     for market_id in &market_ids {
-        let book = engine.order_books.get(&MarketId(market_id.clone()));
+        let snap = book_snaps.get(market_id.as_str());
 
-        let (best_bid, best_ask) = match book {
-            Some(b) => (b.best_bid(), b.best_ask()),
-            None => (None, None),
-        };
+        let (best_bid, best_ask) = snap.map(|s| (s.best_bid, s.best_ask)).unwrap_or((None, None));
 
         let current_mid = match (best_bid, best_ask) {
             (Some(bid), Some(ask)) => Some(bid + (ask - bid) / 2),
@@ -2489,16 +2551,14 @@ async fn build_analytics_data(
         };
 
         let (slippage_1k, slippage_10k, slippage_100k, depth_bid, depth_ask) =
-            match (book, current_mid) {
-                (Some(b), Some(mid)) => {
-                    let asks = b.depth_asks(500);
-                    let bids = b.depth_bids(500);
+            match (snap, current_mid) {
+                (Some(s), Some(mid)) => {
                     (
-                        compute_slippage_bps(&asks, mid, 1_000),
-                        compute_slippage_bps(&asks, mid, 10_000),
-                        compute_slippage_bps(&asks, mid, 100_000),
-                        compute_depth_usdc_1pct(&bids, mid, true),
-                        compute_depth_usdc_1pct(&asks, mid, false),
+                        compute_slippage_bps(&s.asks_depth, mid, 1_000),
+                        compute_slippage_bps(&s.asks_depth, mid, 10_000),
+                        compute_slippage_bps(&s.asks_depth, mid, 100_000),
+                        compute_depth_usdc_1pct(&s.bids_depth, mid, true),
+                        compute_depth_usdc_1pct(&s.asks_depth, mid, false),
                     )
                 }
                 _ => (None, None, None, 0.0, 0.0),
@@ -2580,8 +2640,8 @@ async fn admin_fees_handler(
         return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("unauthorized"))).into_response();
     }
 
-    let engine = state.engine.lock().await;
-    let fee_balances: std::collections::HashMap<String, u64> = engine.fee_balances.clone();
+    let us = state.shards.user_state.read().await;
+    let fee_balances: std::collections::HashMap<String, u64> = us.fee_balances.clone();
     let total_usdc = fee_balances.get("USDC").copied().unwrap_or(0);
     let total_fees_collected_usdc = format_amount(total_usdc, PRICE_DECIMALS);
 
