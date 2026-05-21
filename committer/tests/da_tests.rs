@@ -14,8 +14,8 @@ fn user(i: u8) -> types::UserId {
     a[19] = i;
     types::UserId(a)
 }
-fn usdc() -> AssetId { AssetId("USDC".into()) }
-fn btc()  -> AssetId { AssetId("BTC".into()) }
+fn usdc() -> AssetId { AssetId::from_str("USDC") }
+fn btc()  -> AssetId { AssetId::from_str("BTC") }
 
 fn funded_engine() -> MatchingEngine {
     let mut e = MatchingEngine::new(FeeConfig::default(), 1.0);

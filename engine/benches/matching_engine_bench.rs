@@ -26,8 +26,8 @@ fn mkid(base: &str) -> MarketId {
 fn make_market_fees(base: &str, maker_bps: i64, taker_bps: i64) -> Market {
     Market {
         id: mkid(base),
-        base: AssetId(base.to_string()),
-        quote: AssetId("USDC".to_string()),
+        base: AssetId::from_str(base),
+        quote: AssetId::from_str("USDC"),
         max_orders: 10_000,
         min_order_size: 1,
         price_tick: 1,
@@ -84,7 +84,7 @@ fn cancel_req(user: UserId, order_id: u64, nonce: u64) -> Request {
 
 fn setup_realistic_mm() -> (MatchingEngine, Vec<Request>) {
     let taker = uid(0);
-    let usdc = AssetId("USDC".to_string());
+    let usdc = AssetId::from_str("USDC");
     let large: u64 = 1_000_000_000 * PRICE_SCALE;
     let num_mms: u32 = 50;
 
@@ -98,7 +98,7 @@ fn setup_realistic_mm() -> (MatchingEngine, Vec<Request>) {
     engine.process(dep_req(taker.clone(), usdc.clone(), large, dep_idx), 0);
     dep_idx += 1;
     for base in MARKET_BASES {
-        engine.process(dep_req(taker.clone(), AssetId(base.to_string()), large, dep_idx), 0);
+        engine.process(dep_req(taker.clone(), AssetId::from_str(base), large, dep_idx), 0);
         dep_idx += 1;
     }
 
@@ -107,7 +107,7 @@ fn setup_realistic_mm() -> (MatchingEngine, Vec<Request>) {
         engine.process(dep_req(mm.clone(), usdc.clone(), large, dep_idx), 0);
         dep_idx += 1;
         for base in MARKET_BASES {
-            engine.process(dep_req(mm.clone(), AssetId(base.to_string()), large, dep_idx), 0);
+            engine.process(dep_req(mm.clone(), AssetId::from_str(base), large, dep_idx), 0);
             dep_idx += 1;
         }
     }
@@ -185,8 +185,8 @@ fn setup_realistic_mm() -> (MatchingEngine, Vec<Request>) {
 
 fn setup_post_gtc() -> (MatchingEngine, Request) {
     let mid = mkid("BTC");
-    let usdc = AssetId("USDC".to_string());
-    let btc = AssetId("BTC".to_string());
+    let usdc = AssetId::from_str("USDC");
+    let btc = AssetId::from_str("BTC");
     let mut engine = MatchingEngine::new(FeeConfig::default(), 5.0);
     engine.add_market(make_market("BTC"));
 
@@ -212,8 +212,8 @@ fn setup_post_gtc() -> (MatchingEngine, Request) {
 
 fn setup_cancel() -> (MatchingEngine, Request) {
     let mid = mkid("BTC");
-    let usdc = AssetId("USDC".to_string());
-    let btc = AssetId("BTC".to_string());
+    let usdc = AssetId::from_str("USDC");
+    let btc = AssetId::from_str("BTC");
     let mut engine = MatchingEngine::new(FeeConfig::default(), 5.0);
     engine.add_market(make_market("BTC"));
 
@@ -248,8 +248,8 @@ fn setup_cancel() -> (MatchingEngine, Request) {
 
 fn setup_fill() -> (MatchingEngine, Request) {
     let mid = mkid("BTC");
-    let usdc = AssetId("USDC".to_string());
-    let btc = AssetId("BTC".to_string());
+    let usdc = AssetId::from_str("USDC");
+    let btc = AssetId::from_str("BTC");
     let mut engine = MatchingEngine::new(FeeConfig::default(), 5.0);
     engine.add_market(make_market("BTC"));
 
@@ -267,8 +267,8 @@ fn setup_fill() -> (MatchingEngine, Request) {
 
 fn setup_fok_rollback() -> (MatchingEngine, Request) {
     let mid = mkid("BTC");
-    let usdc = AssetId("USDC".to_string());
-    let btc = AssetId("BTC".to_string());
+    let usdc = AssetId::from_str("USDC");
+    let btc = AssetId::from_str("BTC");
     let mut engine = MatchingEngine::new(FeeConfig::default(), 5.0);
     engine.add_market(make_market("BTC"));
 
@@ -286,7 +286,7 @@ fn setup_fok_rollback() -> (MatchingEngine, Request) {
 
 fn setup_hft_nonce() -> (MatchingEngine, Vec<Request>) {
     let mid = mkid("BTC");
-    let usdc = AssetId("USDC".to_string());
+    let usdc = AssetId::from_str("USDC");
     let mut engine = MatchingEngine::new(FeeConfig::default(), 5.0);
     engine.add_market(make_market("BTC"));
 
@@ -315,7 +315,7 @@ fn setup_hft_nonce() -> (MatchingEngine, Vec<Request>) {
 
 fn setup_credit_auto_cancel() -> (MatchingEngine, Request) {
     let mid = mkid("BTC");
-    let usdc = AssetId("USDC".to_string());
+    let usdc = AssetId::from_str("USDC");
     let mut engine = MatchingEngine::new(FeeConfig::default(), 5.0);
     engine.add_market(make_market("BTC"));
 
@@ -336,8 +336,8 @@ fn setup_credit_auto_cancel() -> (MatchingEngine, Request) {
 
 fn setup_fill_with_fees(maker_bps: i64, taker_bps: i64) -> (MatchingEngine, Request) {
     let mid = mkid("BTC");
-    let usdc = AssetId("USDC".to_string());
-    let btc = AssetId("BTC".to_string());
+    let usdc = AssetId::from_str("USDC");
+    let btc = AssetId::from_str("BTC");
     let mut engine = MatchingEngine::new(FeeConfig::default(), 5.0);
     engine.add_market(make_market_fees("BTC", maker_bps, taker_bps));
 

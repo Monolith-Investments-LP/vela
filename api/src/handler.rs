@@ -199,8 +199,8 @@ async fn list_markets(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         let book = engine.order_books.get(&m.id);
         MarketResponse {
             id: m.id.0.clone(),
-            base: m.base.0.clone(),
-            quote: m.quote.0.clone(),
+            base: m.base.as_str().to_string(),
+            quote: m.quote.as_str().to_string(),
             best_bid: book.and_then(|b| b.best_bid()).map(|p| format_amount(p, PRICE_DECIMALS)),
             best_ask: book.and_then(|b| b.best_ask()).map(|p| format_amount(p, PRICE_DECIMALS)),
             spread: book.and_then(|b| b.spread()).map(|s| format_amount(s, PRICE_DECIMALS)),
@@ -243,7 +243,7 @@ async fn get_balances(
     let balances: Vec<BalanceResponse> = engine.balances.iter()
         .filter(|((u, _), _)| u == &user)
         .map(|((_, asset), bal)| BalanceResponse {
-            asset: asset.0.clone(),
+            asset: asset.as_str().to_string(),
             available: format_amount(bal.available, 8),
             locked: format_amount(bal.locked, 8),
             total: format_amount(bal.total(), 8),
@@ -262,7 +262,7 @@ async fn get_open_orders(
     };
     let engine = state.engine.lock().await;
     let meta = engine.metadata.get(&user);
-    let open_order_ids = meta.map(|m| m.open_order_ids.clone()).unwrap_or_default();
+    let open_order_ids = meta.map(|m| m.iter_order_ids().collect::<Vec<_>>()).unwrap_or_default();
     let orders: Vec<serde_json::Value> = engine.order_books.values()
         .flat_map(|book| {
             open_order_ids.iter().filter_map(|&id| {
@@ -725,7 +725,7 @@ async fn admin_reserves_handler(
 
     let mut engine_balances: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     for ((_, asset), bal) in &engine.balances {
-        *engine_balances.entry(asset.0.clone()).or_insert(0) += bal.total();
+        *engine_balances.entry(asset.as_str().to_string()).or_insert(0) += bal.total();
     }
 
     let total_users = engine.metadata.len();
@@ -830,7 +830,7 @@ async fn initiate_withdrawal(
 
     let req = WithdrawalRequest {
         user: user.clone(),
-        asset: AssetId(body.asset),
+        asset: AssetId::from_str(&body.asset),
         amount: body.amount,
         nonce: body.nonce,
         signature: vec![],
@@ -918,7 +918,7 @@ async fn deposit_handler(
 
     let req = DepositRequest {
         user: user.clone(),
-        asset: AssetId(body.asset),
+        asset: AssetId::from_str(&body.asset),
         amount,
         l1_tx_hash,
     };
@@ -948,7 +948,7 @@ async fn deposit_handler(
     let balances: Vec<BalanceResponse> = engine.balances.iter()
         .filter(|((u, _), _)| u == &user)
         .map(|((_, asset), bal)| BalanceResponse {
-            asset: asset.0.clone(),
+            asset: asset.as_str().to_string(),
             available: format_amount(bal.available, 8),
             locked: format_amount(bal.locked, 8),
             total: format_amount(bal.total(), 8),
@@ -1108,7 +1108,7 @@ async fn force_include_handler(
             };
             let req = EngineRequest::Deposit(DepositRequest {
                 user: uid.clone(),
-                asset: AssetId(asset.clone()),
+                asset: AssetId::from_str(asset),
                 amount,
                 l1_tx_hash: hash_bytes,
             });
@@ -1121,7 +1121,7 @@ async fn force_include_handler(
             };
             let req = EngineRequest::Withdrawal(WithdrawalRequest {
                 user: uid.clone(),
-                asset: AssetId(asset.clone()),
+                asset: AssetId::from_str(asset),
                 amount,
                 nonce,
                 signature: vec![], // bypassed — L1 tx hash is the proof of intent
@@ -1174,8 +1174,8 @@ async fn admin_state_handler(
         let book = engine.order_books.get(&m.id);
         serde_json::json!({
             "id": m.id.0,
-            "base": m.base.0,
-            "quote": m.quote.0,
+            "base": m.base.as_str(),
+            "quote": m.quote.as_str(),
             "best_bid": book.and_then(|b| b.best_bid()).map(|p| format_amount(p, PRICE_DECIMALS)),
             "best_ask": book.and_then(|b| b.best_ask()).map(|p| format_amount(p, PRICE_DECIMALS)),
         })
@@ -1186,13 +1186,13 @@ async fn admin_state_handler(
     let total_deposits: Vec<serde_json::Value> = engine.balances.iter().map(|((user, asset), bal)| {
         serde_json::json!({
             "user": format!("0x{}", hex::encode(user.0)),
-            "asset": asset.0,
+            "asset": asset.as_str(),
             "amount": format_amount(bal.total(), 8),
         })
     }).collect();
 
     let total_open_orders: usize = engine.metadata.values()
-        .map(|m| m.open_order_ids.len())
+        .map(|m| m.order_id_count())
         .sum();
 
     let snapshot_path = {
@@ -1445,7 +1445,7 @@ async fn get_batch(
 
 async fn get_state_root(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let engine = state.engine.lock().await;
-    let order_count: usize = engine.metadata.values().map(|m| m.open_order_ids.len()).sum();
+    let order_count: usize = engine.metadata.values().map(|m| m.order_id_count()).sum();
     let user_count = engine.metadata.len();
     drop(engine);
 
@@ -1686,7 +1686,7 @@ fn default_user_metadata(user: &UserId) -> UserMetadata {
     UserMetadata {
         user: user.clone(),
         nonce_window: NonceWindow::new(),
-        open_order_ids: vec![],
+        open_order_ids: [0u64; 64],
         credit_ratio: 1.0,
         total_quoted_notional: 0,
         actual_collateral: 0,

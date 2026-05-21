@@ -24,8 +24,8 @@ fn engine_with_market() -> MatchingEngine {
     let mut e = MatchingEngine::new(FeeConfig::default(), 5.0);
     e.add_market(Market {
         id: MarketId::new("BTC", "USDC"),
-        base: AssetId("BTC".into()),
-        quote: AssetId("USDC".into()),
+        base: AssetId::from_str("BTC"),
+        quote: AssetId::from_str("USDC"),
         max_orders: 10_000,
         min_order_size: 1,
         price_tick: 1,
@@ -41,13 +41,13 @@ fn funded_engine() -> EngineWithUser {
     let user = types::UserId::from_hex(&user_addr()).unwrap();
     e.process(Request::Deposit(DepositRequest {
         user: user.clone(),
-        asset: AssetId("USDC".into()),
+        asset: AssetId::from_str("USDC"),
         amount: 100_000 * PRICE_SCALE,
         l1_tx_hash: [0u8; 32],
     }), 1);
     e.process(Request::Deposit(DepositRequest {
         user: user.clone(),
-        asset: AssetId("BTC".into()),
+        asset: AssetId::from_str("BTC"),
         amount: 2 * QUANTITY_SCALE,
         l1_tx_hash: [1u8; 32],
     }), 2);
@@ -122,7 +122,7 @@ async fn test_get_balances_after_deposit() {
     let user = types::UserId::from_hex(&user_addr()).unwrap();
     e.process(Request::Deposit(DepositRequest {
         user: user.clone(),
-        asset: AssetId("USDC".into()),
+        asset: AssetId::from_str("USDC"),
         amount: 50_000 * PRICE_SCALE,
         l1_tx_hash: [0u8; 32],
     }), 1);
@@ -181,7 +181,7 @@ async fn test_get_order_by_client_id_found() {
     // Deposit funds and place a resting order with a client_order_id directly through the engine.
     e.process(Request::Deposit(DepositRequest {
         user: user_id.clone(),
-        asset: AssetId("USDC".into()),
+        asset: AssetId::from_str("USDC"),
         amount: 100_000 * PRICE_SCALE,
         l1_tx_hash: [0u8; 32],
     }), 1);

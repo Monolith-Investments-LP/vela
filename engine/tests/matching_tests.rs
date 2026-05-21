@@ -6,8 +6,8 @@ use types::{
 };
 
 fn btc_usdc() -> MarketId { MarketId::new("BTC", "USDC") }
-fn usdc() -> AssetId { AssetId("USDC".into()) }
-fn btc() -> AssetId { AssetId("BTC".into()) }
+fn usdc() -> AssetId { AssetId::from_str("USDC") }
+fn btc() -> AssetId { AssetId::from_str("BTC") }
 fn user(i: u8) -> UserId { let mut a = [0u8; 20]; a[19] = i; UserId(a) }
 
 fn default_market() -> Market {
@@ -329,7 +329,7 @@ fn test_credit_allows_quoting_beyond_available() {
     assert_eq!(p3.status, OrderStatus::Open, "third bid using credit should rest");
 
     let meta = e.metadata.get(&maker).unwrap();
-    assert_eq!(meta.open_order_ids.len(), 3);
+    assert_eq!(meta.order_id_count(), 3);
     let expected_notional = CreditSystem::compute_notional(60 * PRICE_SCALE, QUANTITY_SCALE) * 3;
     assert_eq!(meta.total_quoted_notional, expected_notional,
         "total_quoted_notional should track all three bids");
@@ -390,7 +390,7 @@ fn test_fill_triggers_auto_cancel_when_ratio_breached() {
 
     {
         let meta = e.metadata.get(&maker).unwrap();
-        assert_eq!(meta.open_order_ids.len(), 2);
+        assert_eq!(meta.order_id_count(), 2);
         assert_eq!(meta.actual_collateral, 100 * PRICE_SCALE, "actual_collateral must equal deposit");
     }
 
@@ -682,7 +682,7 @@ fn test_nonce_window_20_concurrent_non_sequential() {
         );
     }
     let meta = e.metadata.get(&u).unwrap();
-    assert_eq!(meta.open_order_ids.len(), 20, "all 20 orders must be resting");
+    assert_eq!(meta.order_id_count(), 20, "all 20 orders must be resting");
 }
 
 /// 21st order with nonce at or below the window minimum is rejected.
@@ -723,7 +723,7 @@ fn test_nonce_window_duplicate_rejected_when_full() {
 
     // The rejected replay must not have evicted the minimum — window still has 20 entries
     let meta = e.metadata.get(&u).unwrap();
-    assert_eq!(meta.open_order_ids.len(), 20, "window size must not shrink on replay attempt");
+    assert_eq!(meta.order_id_count(), 20, "window size must not shrink on replay attempt");
 }
 
 /// After the window slides forward, nonces that fell below the new minimum are permanently rejected.
@@ -758,7 +758,7 @@ fn test_nonce_window_snapshot_restore() {
     let meta = UserMetadata {
         user: user(1),
         nonce_window: window,
-        open_order_ids: vec![],
+        open_order_ids: [0u64; 64],
         credit_ratio: 1.0,
         total_quoted_notional: 0,
         actual_collateral: 0,
@@ -1038,7 +1038,7 @@ fn test_credit_breach_multiple_cancels_until_ratio_satisfied() {
     assert_eq!(posted.status, OrderStatus::Open);
 
     let meta = e.metadata.get(&maker).unwrap();
-    assert_eq!(meta.open_order_ids.len(), 2, "two orders remain (oid3 + new order)");
+    assert_eq!(meta.order_id_count(), 2, "two orders remain (oid3 + new order)");
 }
 
 /// If the incoming order fails after auto-cancels, the delta rollback undoes the auto-cancels.
@@ -1083,7 +1083,7 @@ fn test_credit_breach_auto_cancel_rolled_back_on_order_failure() {
     assert!(book.get_order(oid_rest).is_some(), "auto-cancelled order must be restored on rollback");
 
     let meta = e.metadata.get(&maker).unwrap();
-    assert!(meta.open_order_ids.contains(&oid_rest));
+    assert!(meta.contains_order_id(oid_rest));
     let expected_notional = CreditSystem::compute_notional(80 * PRICE_SCALE, QUANTITY_SCALE);
     assert_eq!(meta.total_quoted_notional, expected_notional, "total_quoted_notional must be unchanged after rollback");
 }

@@ -58,7 +58,7 @@ pub async fn save_snapshot(state: Arc<crate::AppState>) -> Result<()> {
             balances
                 .entry(user.to_hex())
                 .or_default()
-                .insert(asset.0.clone(), SerializedBalance { available: balance.available, locked: balance.locked });
+                .insert(asset.as_str().to_string(), SerializedBalance { available: balance.available, locked: balance.locked });
         }
 
         let mut orders: HashMap<String, Vec<Order>> = HashMap::new();
@@ -173,7 +173,7 @@ pub fn restore_engine_from_snapshot(
     for (user_hex, asset_balances) in snapshot.balances {
         let user = UserId::from_hex(&user_hex)?;
         for (asset_str, bal) in asset_balances {
-            let asset = AssetId(asset_str);
+            let asset = AssetId::from_str(&asset_str);
             engine.balances.insert(
                 (user.clone(), asset.clone()),
                 Balance { user: user.clone(), asset, available: bal.available, locked: bal.locked },
@@ -333,7 +333,7 @@ pub fn replay_wal_entries(
                 wal::DEPOSIT => {
                     if let Ok(dep) = entry.decode::<WalDeposit>() {
                         if let Ok(user) = types::UserId::from_hex(&dep.user) {
-                            let asset = types::AssetId(dep.asset);
+                            let asset = types::AssetId::from_str(&dep.asset);
                             let mut hash = [0u8; 32];
                             if let Some(tx) = &dep.tx_hash {
                                 let hex_str = tx.strip_prefix("0x").unwrap_or(tx);
@@ -357,7 +357,7 @@ pub fn replay_wal_entries(
                 wal::WITHDRAWAL_REQUEST => {
                     if let Ok(wr) = entry.decode::<WalWithdrawalRequest>() {
                         if let Ok(user) = types::UserId::from_hex(&wr.user) {
-                            let asset = types::AssetId(wr.asset);
+                            let asset = types::AssetId::from_str(&wr.asset);
                             engine.process(
                                 types::Request::Withdrawal(WithdrawalRequest {
                                     user,

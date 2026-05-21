@@ -10,17 +10,17 @@ const IN = "var(--font-inter-sans), 'Inter', sans-serif"
 
 const STATS = [
   {
-    num: '0.71 μs',
+    num: '1.066 μs',
     label: 'MATCH LATENCY',
     sub: 'p50, Apple M3, release build',
   },
   {
-    num: '725k',
+    num: '85.4k',
     label: 'OPERATIONS / SECOND',
     sub: 'Realistic MM workload, 98% cancel / 2% fill',
   },
   {
-    num: '11.2×',
+    num: '7.4×',
     label: 'FASTER THAN PULSE',
     sub: 'Per-operation vs. the leading open-source DEX',
   },

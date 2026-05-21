@@ -14,8 +14,8 @@ fn user(i: u8) -> UserId {
     UserId(a)
 }
 
-fn usdc() -> AssetId { AssetId("USDC".into()) }
-fn btc()  -> AssetId { AssetId("BTC".into())  }
+fn usdc() -> AssetId { AssetId::from_str("USDC") }
+fn btc()  -> AssetId { AssetId::from_str("BTC") }
 
 fn deposit_req(u: &UserId, amount: u64) -> Request {
     Request::Deposit(DepositRequest {

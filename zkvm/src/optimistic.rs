@@ -185,7 +185,7 @@ mod tests {
     fn deposit(user: &UserId, asset: &str, amount: u64) -> Request {
         Request::Deposit(DepositRequest {
             user: user.clone(),
-            asset: AssetId(asset.to_string()),
+            asset: AssetId::from_str(asset),
             amount,
             l1_tx_hash: [0u8; 32],
         })
@@ -281,12 +281,12 @@ mod tests {
         // Build a tampered snapshot that pre-credits the user with a huge balance.
         let tampered_key = state::StateKey::Balance {
             user: u.clone(),
-            asset: AssetId("BTC".to_string()),
+            asset: AssetId::from_str("BTC"),
         }
         .encode();
         let tampered_balance = types::Balance {
             user: u.clone(),
-            asset: AssetId("BTC".to_string()),
+            asset: AssetId::from_str("BTC"),
             available: 999_999_999,
             locked: 0,
         };

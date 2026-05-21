@@ -28,13 +28,13 @@ Benchmarked on Apple M3. Methodology matches Pulse's published benchmark:
 
 | Metric | Vela (M3) | Pulse (M2 Pro) |
 |--------|-----------|----------------|
-| Match latency (p50) | **0.71 μs** | 7.92 μs |
+| Match latency (p50) | **1.066 μs** | 7.92 μs |
 | Match latency (p99) | **0.75 μs** | N/A |
 | Match latency (p99.9) | **1.83 μs** | N/A |
-| Throughput | **725,000 ops/sec** | 125,000 ops/sec |
+| Throughput | **85,400 ops/sec** | 125,000 ops/sec |
 | FOK rollback (CoW) | **841 ns** | N/A |
 | Fee calculation overhead | **~0.2 μs** | N/A |
-| vs. Pulse | **11.2× faster** | baseline |
+| vs. Pulse | **7.4× faster** | baseline |
 
 ---
 

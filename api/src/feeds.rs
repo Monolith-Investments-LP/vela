@@ -180,7 +180,7 @@ impl FeedManager {
                 }
                 Response::BalanceUpdated(update) => {
                     let msg = WsServerMessage::BalanceUpdate {
-                        asset: update.asset.0.clone(),
+                        asset: update.asset.as_str().to_string(),
                         available: update.available.to_string(),
                         locked: update.locked.to_string(),
                     };
@@ -189,7 +189,7 @@ impl FeedManager {
                     }
                     let data = serde_json::json!({
                         "type": "balance_update",
-                        "asset": update.asset.0,
+                        "asset": update.asset.as_str(),
                         "available": update.available.to_string(),
                         "locked": update.locked.to_string(),
                     });

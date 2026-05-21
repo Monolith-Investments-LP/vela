@@ -317,9 +317,9 @@ function WhatIsVela() {
       <Table
         headers={['Metric', 'Value', 'Context']}
         rows={[
-          ['p50 match latency', '1.38 μs', 'Per-operation on realistic MM workload'],
-          ['Throughput', '725,000 ops/sec', 'Sustained on Apple M3'],
-          ['vs Pulse (baseline)', '5.8× faster', 'Per-operation comparison'],
+          ['p50 match latency', '1.066 μs', 'Per-operation on realistic MM workload'],
+          ['Throughput', '85,400 ops/sec', 'Sustained on Apple M3'],
+          ['vs Pulse (baseline)', '7.4× faster', 'Per-operation comparison'],
           ['Markets (beta)', '11', 'Live on public beta'],
         ]}
       />
@@ -519,7 +519,7 @@ function WhitePaper() {
         Benchmarks are conducted on a realistic market maker workload — continuous two-sided quoting
         across multiple markets with frequent cancel-and-replace. Results are compared against Pulse,
         a reference CLOB implementation, at both the per-operation and throughput levels. Vela
-        achieves 1.38 μs p50 match latency and 725,000 ops/sec sustained, approximately 5.8× faster
+        achieves 1.066 μs p50 match latency and 85,400 ops/sec sustained, approximately 7.4× faster
         than Pulse on a per-operation basis.
       </P>
 
@@ -2006,7 +2006,7 @@ function MatchingEngine() {
       <H2>Performance</H2>
       <P>
         On a realistic market maker workload (continuous two-sided quoting, frequent
-        cancel-and-replace), the engine achieves 1.38 μs p50 match latency and 725,000 ops/sec
+        cancel-and-replace), the engine achieves 1.066 μs p50 match latency and 85,400 ops/sec
         sustained on Apple M3. The dominant cost is memory access — the hot path touches only a
         small working set of in-memory structures.
       </P>
@@ -2666,7 +2666,7 @@ function Faq() {
 
       <H3>How fast is the matching engine?</H3>
       <P>
-        1.38 μs p50 match latency and 725,000 ops/sec on a realistic market maker workload. 5.8×
+        1.066 μs p50 match latency and 85,400 ops/sec on a realistic market maker workload. 7.4×
         faster than Pulse on a per-operation basis.
       </P>
 

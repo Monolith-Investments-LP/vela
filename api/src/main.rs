@@ -14,8 +14,8 @@ fn seed_markets(engine: &mut MatchingEngine) {
     ] {
         engine.add_market(Market {
             id: MarketId(format!("{ticker}-USDC")),
-            base: AssetId(ticker.to_string()),
-            quote: AssetId("USDC".into()),
+            base: AssetId::from_str(ticker),
+            quote: AssetId::from_str("USDC"),
             max_orders: 10_000,
             min_order_size: 1,
             price_tick: 1,
@@ -40,7 +40,7 @@ fn seed_markets(engine: &mut MatchingEngine) {
         engine.process(
             Request::Deposit(DepositRequest {
                 user: test_user.clone(),
-                asset: AssetId(asset.to_string()),
+                asset: AssetId::from_str(asset),
                 amount: 1_000_000_000_000,
                 l1_tx_hash: hash,
             }),
@@ -63,7 +63,7 @@ fn seed_order_books(engine: &mut MatchingEngine) {
     engine.process(
         Request::Deposit(DepositRequest {
             user: seed_user.clone(),
-            asset: AssetId("USDC".into()),
+            asset: AssetId::from_str("USDC"),
             amount: 10_000_000_000_000_000,
             l1_tx_hash: make_hash(0, 0),
         }),
@@ -80,7 +80,7 @@ fn seed_order_books(engine: &mut MatchingEngine) {
         engine.process(
             Request::Deposit(DepositRequest {
                 user: seed_user.clone(),
-                asset: AssetId(asset.to_string()),
+                asset: AssetId::from_str(asset),
                 amount: 100_000_000_000_000,
                 l1_tx_hash: make_hash(1, i as u8),
             }),

@@ -132,11 +132,11 @@ fn market_id(i: usize) -> MarketId {
 }
 
 fn base_asset(i: usize) -> AssetId {
-    AssetId(format!("ASSET{}", i))
+    AssetId::from_str(&format!("ASSET{}", i))
 }
 
 fn usdc() -> AssetId {
-    AssetId("USDC".into())
+    AssetId::from_str("USDC")
 }
 
 // ---------------------------------------------------------------------------
@@ -711,7 +711,7 @@ fn bench_component_breakdown(c: &mut Criterion) {
         let mut meta = UserMetadata {
             user: user(1),
             nonce_window: NonceWindow::new(),
-            open_order_ids: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            open_order_ids: { let mut a = [0u64; 64]; a[..10].copy_from_slice(&[1,2,3,4,5,6,7,8,9,10]); a },
             credit_ratio: 1.0,
             total_quoted_notional: 0,
             actual_collateral: 0,
@@ -745,7 +745,7 @@ fn bench_component_breakdown(c: &mut Criterion) {
             cow.set_metadata(black_box(UserMetadata {
                 user: user(1),
                 nonce_window: NonceWindow::new(),
-                open_order_ids: vec![42],
+                open_order_ids: { let mut a = [0u64; 64]; a[0] = 42; a },
                 credit_ratio: 1.0,
                 total_quoted_notional: 0,
                 actual_collateral: 0,

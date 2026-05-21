@@ -287,8 +287,8 @@ export default function MarketsPage() {
           <div style={{ display: 'flex', gap: 40 }}>
             {[
               { label: 'TOTAL MARKETS', value: '16' },
-              { label: 'ENGINE LATENCY', value: '1.38 μs' },
-              { label: 'OPS / SEC', value: '725,000' },
+              { label: 'ENGINE LATENCY', value: '1.066 μs' },
+              { label: 'OPS / SEC', value: '85,400' },
               { label: 'NETWORK', value: 'Sepolia' },
             ].map(({ label, value }) => (
               <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>

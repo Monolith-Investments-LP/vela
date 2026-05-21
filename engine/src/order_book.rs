@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use types::{Order, OrderId, OrderSide, Price, Quantity, VelaError};
 
 #[derive(Debug, Clone)]
@@ -186,6 +186,23 @@ impl OrderBook {
             .collect()
     }
 
+    /// Zero-allocation variant: yields references into existing price levels.
+    /// Used by the hot-path `match_order` to avoid cloning every resting Order.
+    pub fn matchable_asks_ref(&self, bid_price: Price) -> impl Iterator<Item = (Price, &VecDeque<Order>)> {
+        self.asks
+            .iter()
+            .take_while(move |(p, _)| **p <= bid_price)
+            .map(|(p, l)| (*p, &l.orders))
+    }
+
+    pub fn matchable_bids_ref(&self, ask_price: Price) -> impl Iterator<Item = (Price, &VecDeque<Order>)> {
+        self.bids
+            .iter()
+            .rev()
+            .take_while(move |(p, _)| **p >= ask_price)
+            .map(|(p, l)| (*p, &l.orders))
+    }
+
     pub fn depth_bids(&self, levels: usize) -> Vec<(Price, Quantity)> {
         self.bids
             .iter()
@@ -201,6 +218,16 @@ impl OrderBook {
             .take(levels)
             .map(|(p, l)| (*p, l.total_quantity()))
             .collect()
+    }
+
+    /// Zero-allocation best-level quantity queries — used instead of depth_asks/bids(1)
+    /// to avoid a Vec allocation on every match_order call.
+    pub fn top_ask_quantity(&self) -> Quantity {
+        self.asks.values().next().map(|l| l.total_quantity()).unwrap_or(0)
+    }
+
+    pub fn top_bid_quantity(&self) -> Quantity {
+        self.bids.values().next_back().map(|l| l.total_quantity()).unwrap_or(0)
     }
 
     pub fn all_orders(&self) -> Vec<Order> {

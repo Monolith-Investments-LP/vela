@@ -69,8 +69,8 @@ pub async fn run_background_task(state: Arc<AppState>) {
                     let book = engine.order_books.get(&m.id);
                     serde_json::json!({
                         "id": m.id.0,
-                        "base": m.base.0,
-                        "quote": m.quote.0,
+                        "base": m.base.as_str(),
+                        "quote": m.quote.as_str(),
                         "best_bid": book.and_then(|b| b.best_bid()).map(|p| format_amount(p, PRICE_DECIMALS)),
                         "best_ask": book.and_then(|b| b.best_ask()).map(|p| format_amount(p, PRICE_DECIMALS)),
                         "spread": book.and_then(|b| b.spread()).map(|s| format_amount(s, PRICE_DECIMALS)),
@@ -344,8 +344,8 @@ async fn handle_client_message(
                             let book = engine.order_books.get(&m.id);
                             serde_json::json!({
                                 "id": m.id.0,
-                                "base": m.base.0,
-                                "quote": m.quote.0,
+                                "base": m.base.as_str(),
+                                "quote": m.quote.as_str(),
                                 "best_bid": book.and_then(|b| b.best_bid()).map(|p| format_amount(p, PRICE_DECIMALS)),
                                 "best_ask": book.and_then(|b| b.best_ask()).map(|p| format_amount(p, PRICE_DECIMALS)),
                                 "spread": book.and_then(|b| b.spread()).map(|s| format_amount(s, PRICE_DECIMALS)),
@@ -466,7 +466,7 @@ async fn handle_timestamp_auth(
                 let bals: Vec<serde_json::Value> = engine.balances.iter()
                     .filter(|((u, _), _)| u == &user)
                     .map(|((_, asset), bal)| serde_json::json!({
-                        "asset": asset.0,
+                        "asset": asset.as_str(),
                         "available": crate::types::format_amount(bal.available, 8),
                         "locked": crate::types::format_amount(bal.locked, 8),
                         "total": crate::types::format_amount(bal.total(), 8),
@@ -474,7 +474,7 @@ async fn handle_timestamp_auth(
                     .collect();
 
                 let meta = engine.metadata.get(&user);
-                let open_ids = meta.map(|m| m.open_order_ids.clone()).unwrap_or_default();
+                let open_ids = meta.map(|m| m.iter_order_ids().collect::<Vec<_>>()).unwrap_or_default();
                 let ords: Vec<serde_json::Value> = engine.order_books.values()
                     .flat_map(|book| {
                         open_ids.iter().filter_map(|&id| {

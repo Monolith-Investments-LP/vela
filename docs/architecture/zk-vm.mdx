@@ -15,7 +15,7 @@ There are two approaches to verifiable off-chain computation:
 | **Optimistic** | Batches are assumed correct; fraud proofs challenge incorrect transitions | Low overhead per batch, challenge period required |
 
 Vela uses the **optimistic** approach because:
-1. The proving cost of a ZK-validity proof per batch would be prohibitive at Vela's throughput (57k+ ops/sec)
+1. The proving cost of a ZK-validity proof per batch would be prohibitive at Vela's throughput (85.4k+ ops/sec)
 2. The fraud window provides sufficient security for exchange use cases
 3. Deterministic execution (fixed-point arithmetic, single-threaded engine) makes fraud proof generation tractable
 

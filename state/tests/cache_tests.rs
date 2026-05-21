@@ -2,8 +2,8 @@ use state::{StateCache, StateKey, MptStore, StateManager};
 use types::{AssetId, Balance, MarketId, UserId, UserMetadata};
 
 fn user(i: u8) -> UserId { let mut a = [0u8; 20]; a[19] = i; UserId(a) }
-fn usdc() -> AssetId { AssetId("USDC".into()) }
-fn btc() -> AssetId { AssetId("BTC".into()) }
+fn usdc() -> AssetId { AssetId::from_str("USDC") }
+fn btc() -> AssetId { AssetId::from_str("BTC") }
 
 fn balance(user: UserId, asset: AssetId, available: u64, locked: u64) -> Balance {
     Balance { user, asset, available, locked }

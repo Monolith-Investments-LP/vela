@@ -181,8 +181,58 @@ impl std::fmt::Display for MarketId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct AssetId(pub String);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AssetId(pub [u8; 16]);
+
+impl AssetId {
+    pub const fn from_str(s: &str) -> Self {
+        let bytes = s.as_bytes();
+        let mut arr = [0u8; 16];
+        let len = if bytes.len() > 16 { 16 } else { bytes.len() };
+        let mut i = 0;
+        while i < len {
+            arr[i] = bytes[i];
+            i += 1;
+        }
+        AssetId(arr)
+    }
+
+    pub fn as_str(&self) -> &str {
+        let end = self.0.iter().rposition(|&b| b != 0).map(|i| i + 1).unwrap_or(0);
+        std::str::from_utf8(&self.0[..end]).unwrap_or("")
+    }
+}
+
+impl std::fmt::Display for AssetId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl From<&str> for AssetId {
+    fn from(s: &str) -> Self {
+        AssetId::from_str(s)
+    }
+}
+
+impl From<String> for AssetId {
+    fn from(s: String) -> Self {
+        AssetId::from_str(&s)
+    }
+}
+
+impl serde::Serialize for AssetId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for AssetId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(AssetId::from_str(&s))
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderSide {
@@ -278,11 +328,31 @@ impl Balance {
     }
 }
 
+mod open_order_ids_serde {
+    use super::OrderId;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(arr: &[OrderId; 64], serializer: S) -> Result<S::Ok, S::Error> {
+        let v: Vec<OrderId> = arr.iter().copied().filter(|&id| id != 0).collect();
+        v.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[OrderId; 64], D::Error> {
+        let v = Vec::<OrderId>::deserialize(deserializer)?;
+        let mut arr = [0u64; 64];
+        for (i, &id) in v.iter().take(64).enumerate() {
+            arr[i] = id;
+        }
+        Ok(arr)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserMetadata {
     pub user: UserId,
     pub nonce_window: NonceWindow,
-    pub open_order_ids: Vec<OrderId>,
+    #[serde(with = "open_order_ids_serde")]
+    pub open_order_ids: [OrderId; 64],
     pub credit_ratio: f64,
     pub total_quoted_notional: u64,
     /// Actual quote-asset collateral: deposits minus fills consumed (excludes credit ghost).
@@ -294,6 +364,32 @@ pub struct UserMetadata {
     pub ref_earnings: u64,
     #[serde(default)]
     pub referred_users: Vec<String>,
+}
+
+impl UserMetadata {
+    pub fn push_order_id(&mut self, id: OrderId) {
+        if let Some(slot) = self.open_order_ids.iter_mut().find(|&&mut s| s == 0) {
+            *slot = id;
+        }
+    }
+
+    pub fn remove_order_id(&mut self, id: OrderId) {
+        if let Some(slot) = self.open_order_ids.iter_mut().find(|&&mut s| s == id) {
+            *slot = 0;
+        }
+    }
+
+    pub fn iter_order_ids(&self) -> impl Iterator<Item = OrderId> + '_ {
+        self.open_order_ids.iter().copied().filter(|&id| id != 0)
+    }
+
+    pub fn order_id_count(&self) -> usize {
+        self.open_order_ids.iter().filter(|&&id| id != 0).count()
+    }
+
+    pub fn contains_order_id(&self, id: OrderId) -> bool {
+        self.open_order_ids.iter().any(|&s| s == id)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

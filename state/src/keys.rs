@@ -16,7 +16,7 @@ impl StateKey {
                 let mut k = b"bal:".to_vec();
                 k.extend_from_slice(&user.0);
                 k.push(b':');
-                k.extend_from_slice(asset.0.as_bytes());
+                k.extend_from_slice(asset.as_str().as_bytes());
                 k
             }
             StateKey::Metadata { user } => {
@@ -42,7 +42,8 @@ impl StateKey {
         if let Some(rest) = raw.strip_prefix(b"bal:") {
             if rest.len() < 21 { return None; }
             let user = UserId(rest[..20].try_into().ok()?);
-            let asset = AssetId(String::from_utf8(rest[21..].to_vec()).ok()?);
+            let s = std::str::from_utf8(&rest[21..]).ok()?;
+            let asset = AssetId::from_str(s);
             return Some(StateKey::Balance { user, asset });
         }
         if let Some(rest) = raw.strip_prefix(b"meta:") {

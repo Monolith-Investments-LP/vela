@@ -14,7 +14,7 @@ Vela is purpose-built for high-frequency and professional market makers. Most DE
 | Credit system | Quote up to 1× deposited | Must hold full collateral |
 | Nonce scheme | 20 concurrent in-flight orders | Strict sequence required |
 | Client order IDs | Native, cancel by your own ID | Order ID only |
-| Matching latency | 1.38μs p50, 725k ops/sec | 100ms–500ms |
+| Matching latency | 1.066μs p50, 85.4k ops/sec | 100ms–500ms |
 | Order privacy | Private L3 feed per wallet | Fully public |
 | Maker fee | −1 bps (rebate) | 0–5 bps fee |
 
@@ -28,7 +28,7 @@ Instead of a strict per-user sequence number, Vela maintains a rolling window of
 
 ### Sub-microsecond Matching
 
-The matching engine runs on a custom Rust CLOB with a 1.38μs p50 match latency at 725,000 operations per second. Benchmarks use a single-threaded, in-process setup to reflect the actual latency you experience, not a theoretical maximum.
+The matching engine runs on a custom Rust CLOB with a 1.066μs p50 match latency at 85,400 operations per second. Benchmarks use a single-threaded, in-process setup to reflect the actual latency you experience, not a theoretical maximum.
 
 ---
 

@@ -112,7 +112,7 @@ impl DeltaBuffer {
             .unwrap_or_else(|| UserMetadata {
                 user: user.clone(),
                 nonce_window: types::NonceWindow::new(),
-                open_order_ids: vec![],
+                open_order_ids: [0u64; 64],
                 credit_ratio: 1.0,
                 total_quoted_notional: 0,
                 actual_collateral: 0,

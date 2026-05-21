@@ -77,7 +77,7 @@ impl MatchingEngine {
         self.metadata.get(user).cloned().unwrap_or_else(|| UserMetadata {
             user: user.clone(),
             nonce_window: types::NonceWindow::new(),
-            open_order_ids: vec![],
+            open_order_ids: [0u64; 64],
             credit_ratio: 1.0,
             total_quoted_notional: 0,
             actual_collateral: 0,
@@ -140,7 +140,7 @@ impl MatchingEngine {
         }
 
         let mut candidates: Vec<(Timestamp, OrderId, u64, MarketId, OrderSide, u64, u64, Option<String>)> =
-            meta.open_order_ids.iter().filter_map(|&oid| {
+            meta.iter_order_ids().filter_map(|oid| {
                 for (mid, book) in &self.order_books {
                     if let Some(o) = book.get_order(oid) {
                         let notional = CreditSystem::compute_notional(o.price, o.remaining_quantity());
@@ -171,7 +171,7 @@ impl MatchingEngine {
             };
             delta.record_remove(market_id, oid);
             delta.unlock_to_available(user, &cancel_asset, unlock_amount, &self.balances);
-            meta.open_order_ids.retain(|&id| id != oid);
+            meta.remove_order_id(oid);
             meta.total_quoted_notional = meta.total_quoted_notional.saturating_sub(notional);
             responses.push(Response::OrderCanceled(OrderCanceledResponse {
                 order_id: oid,
@@ -287,7 +287,7 @@ impl MatchingEngine {
             };
             delta.lock_available(&req.user, &spend_asset, resting_spend, &self.balances);
             order.status = if total_filled > 0 { OrderStatus::PartiallyFilled } else { OrderStatus::Open };
-            meta.open_order_ids.push(order.id);
+            meta.push_order_id(order.id);
             meta.total_quoted_notional += CreditSystem::compute_notional(req.price, remaining);
             delta.set_metadata(meta);
             delta.record_insert(req.market.clone(), order.clone());
@@ -384,7 +384,7 @@ impl MatchingEngine {
                 if fully_consumed {
                     delta.record_remove(order.market.clone(), resting.id);
                     let mut maker_meta = delta.get_metadata(&resting.user, &self.metadata);
-                    maker_meta.open_order_ids.retain(|&id| id != resting.id);
+                    maker_meta.remove_order_id(resting.id);
                     let resting_notional = CreditSystem::compute_notional(resting.price, resting.remaining_quantity());
                     maker_meta.total_quoted_notional =
                         maker_meta.total_quoted_notional.saturating_sub(resting_notional);
@@ -447,9 +447,8 @@ impl MatchingEngine {
                 let maker_deposited = maker_meta.actual_collateral;
 
                 let open_orders: Vec<(OrderId, u64)> = maker_meta
-                    .open_order_ids
-                    .iter()
-                    .filter_map(|&oid| {
+                    .iter_order_ids()
+                    .filter_map(|oid| {
                         for book in self.order_books.values() {
                             if let Some(o) = book.get_order(oid) {
                                 let consumed = locally_consumed.get(&oid).copied().unwrap_or(0);
@@ -487,7 +486,7 @@ impl MatchingEngine {
                                 unlock_amt,
                                 &self.balances,
                             );
-                            maker_meta.open_order_ids.retain(|&id| id != oid);
+                            maker_meta.remove_order_id(oid);
                             maker_meta.total_quoted_notional =
                                 maker_meta.total_quoted_notional.saturating_sub(notional);
 
@@ -542,7 +541,7 @@ impl MatchingEngine {
         }
 
         let net_exchange_fee = fill.taker_fee + fill.maker_fee;
-        delta.add_exchange_fee(&market.quote.0, net_exchange_fee);
+        delta.add_exchange_fee(market.quote.as_str(), net_exchange_fee);
 
         if fill.taker_fee > 0 {
             let taker_meta = delta.get_metadata(&fill.taker, &self.metadata);
@@ -551,7 +550,7 @@ impl MatchingEngine {
                     let referral_amount = (fill.taker_fee as u64) / 5;
                     if referral_amount > 0 {
                         delta.credit_available(&ref_user, &market.quote, referral_amount, &self.balances);
-                        delta.add_exchange_fee(&market.quote.0, -(referral_amount as i64));
+                        delta.add_exchange_fee(market.quote.as_str(), -(referral_amount as i64));
                         let mut ref_meta = delta.get_metadata(&ref_user, &self.metadata);
                         ref_meta.ref_earnings = ref_meta.ref_earnings.saturating_add(referral_amount);
                         delta.set_metadata(ref_meta);
@@ -592,7 +591,7 @@ impl MatchingEngine {
 
         match removed {
             Some(order) => {
-                meta.open_order_ids.retain(|&id| id != order_id);
+                meta.remove_order_id(order_id);
                 let market = self.markets.get(&order.market).cloned();
                 if let Some(market) = market {
                     let (spend_asset, spend_amount) = match order.side {

@@ -23,36 +23,54 @@ Isolated benchmarks (post, cancel, fill, FOK, nonce, credit, fee) each measure a
 
 | Feature | Measured impact |
 |---------|----------------|
-| CoW delta buffer | ~0.3 μs overhead vs zero-fee fill; instant rollback (FOK rollback: 841 ns) |
-| HFT nonce window | 20 concurrent non-sequential nonces accepted; 1.39 μs/order avg |
-| Credit auto-cancel | Full oldest-order eviction + new order post: 4.33 μs |
-| Fee calculation | ~0.2 μs overhead vs zero-fee fill (3.47 μs vs 3.30 μs) |
+| CoW delta buffer | ~0.3 μs overhead vs zero-fee fill; instant rollback (FOK rollback: 802 ns) |
+| HFT nonce window | 20 concurrent non-sequential nonces accepted; 1.40 μs/order avg |
+| Credit auto-cancel | Full oldest-order eviction + new order post: 4.10 μs |
+| Fee calculation | ~0.4 μs overhead vs zero-fee fill (3.81 μs vs 3.43 μs) |
+
+## Phase 3 hot-path optimizations (2026-05-20)
+
+Three targeted changes to reduce metadata-clone overhead on the 98% non-fill path:
+
+| Optimization | Component impact |
+|---|---|
+| `NonceWindow`: `BTreeSet<Nonce>` → `[Nonce; 20]` sorted array | `user_metadata_clone`: 200 ns → 58.2 ns (−71%) |
+| `top_depth` computed lazily (only when fills occur) | eliminates `Vec` allocation on every non-fill `match_order` call |
+| `matchable_asks_ref` / `matchable_bids_ref`: iterate by reference | eliminates `Order` clones for matching price levels |
 
 ## Results
 
-Measured 2026-04-19 on Apple M3.
+Measured 2026-05-20 on Apple M3.
 
 | Benchmark | Time (p50) | Throughput |
 |-----------|-----------|------------|
-| `realistic_mm_workload` | 0.71 μs / request | 725k ops/sec |
-| `post_order_gtc` | 10.24 μs | — |
-| `cancel_order` | 9.97 μs | — |
-| `fill_order` | 3.46 μs | — |
-| `fok_rollback` | 841 ns | — |
-| `hft_nonce_window` (20 orders) | 27.72 μs | 721k orders/sec |
-| `credit_auto_cancel` | 4.33 μs | — |
-| `fee_calculation_overhead/with_fees` | 3.47 μs | — |
-| `fee_calculation_overhead/zero_fees` | 3.30 μs | — |
+| `realistic_mm_workload` | 1.066 μs / request | 85.4k ops/sec |
+| `post_order_gtc` | 9.13 μs | — |
+| `cancel_order` | 10.16 μs | — |
+| `fill_order` | 3.80 μs | — |
+| `fok_rollback` | 802 ns | — |
+| `hft_nonce_window` (20 orders) | 27.98 μs | 715k orders/sec |
+| `credit_auto_cancel` | 4.10 μs | — |
+| `fee_calculation_overhead/with_fees` | 3.81 μs | — |
+| `fee_calculation_overhead/zero_fees` | 3.43 μs | — |
+| `latency_percentiles/post_order_raw` (p50) | 1.019 μs | — |
+| `component_breakdown/user_metadata_clone` | 58.2 ns | — |
+| `component_breakdown/nonce_window_accept` | 19.5 ns | — |
+| `component_breakdown/engine_process_post_order` | 1.95 μs | — |
 
 ### vs. Pulse (reference open-source DEX engine, measured on Apple M2 Pro)
 
-| Metric | Vela Phase 2 (M3) | Pulse (M2 Pro) |
+| Metric | Vela Phase 3 (M3) | Pulse (M2 Pro) |
 |--------|-------------------|----------------|
-| Full loop latency (p50) | 0.71 μs | 7.92 μs |
-| Full loop latency (p99) | 0.75 μs | N/A |
-| Full loop latency (p99.9) | 1.83 μs | N/A |
-| Throughput | 725k ops/sec | 125k ops/sec |
-| Relative speedup | **11.2×** | baseline |
+| Full loop latency (p50) | 1.066 μs | 7.92 μs |
+| Throughput | 85.4k ops/sec | 125k ops/sec |
+| Relative speedup | **7.4×** | baseline |
+
+### Remaining hot-path costs (for future work)
+
+The largest remaining costs on the cancel/re-quote path are:
+- `AssetId(String)` clone in `DeltaBuffer::get_balance` — String allocation per balance lookup (fix: `Arc<str>`)
+- `open_order_ids: Vec<OrderId>` clone in `UserMetadata` — 40 entries × 8 bytes per MM metadata read (fix: `Arc<[OrderId]>` or in-place delta)
 
 ### Running benchmarks
 
