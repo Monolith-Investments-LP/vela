@@ -5,6 +5,7 @@ pub mod da;
 pub mod feeds;
 pub mod handler;
 pub mod mm;
+pub mod pyth;
 pub mod rate_limit;
 pub mod snapshot;
 pub mod toxicity_feed;

@@ -489,6 +489,7 @@ async fn record_order_and_fills(
                 taker_address: f.taker.to_hex(),
                 timestamp: f.timestamp,
                 side: side_to_str(f.side).to_string(),
+                synthetic: false,
             });
             // Cap at 100k fills per market, evicting oldest first.
             let market_count = fills_guard.iter().filter(|fill| fill.market_id == body.market).count();
@@ -1702,9 +1703,10 @@ async fn ohlcv_handler(
         candles.drain(..candles.len() - limit);
     }
 
-    let has_real_data = candles.len() >= 2;
+    let has_live_prices = market_fills.iter().any(|f| f.synthetic);
+    let has_real_data = market_fills.iter().any(|f| !f.synthetic) && candles.len() >= 2;
 
-    if !has_real_data {
+    if !has_live_prices && !has_real_data {
         candles = generate_simulated_candles(&market_id, interval_secs, limit);
     }
 
@@ -1715,6 +1717,7 @@ async fn ohlcv_handler(
         "candles": candles,
         "count": count,
         "has_real_data": has_real_data,
+        "has_live_prices": has_live_prices,
     })))
 }
 

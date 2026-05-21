@@ -324,6 +324,18 @@ async fn main() {
         api::snapshot::run_snapshot_task(snapshot_state).await;
     });
 
+    let pyth_enabled = std::env::var("VELA_PYTH_ENABLED")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(true);
+    if pyth_enabled {
+        let pyth_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            api::pyth::pyth_feed_task(pyth_state).await;
+        });
+    } else {
+        tracing::info!("VELA_PYTH_ENABLED=false — Pyth feed task disabled");
+    }
+
     let router = api::build_router(state);
 
     let addr = format!("0.0.0.0:{port}");

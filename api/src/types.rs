@@ -13,6 +13,8 @@ pub struct StoredFill {
     pub taker_address: String,
     pub timestamp: u64,
     pub side: String,
+    #[serde(default)]
+    pub synthetic: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

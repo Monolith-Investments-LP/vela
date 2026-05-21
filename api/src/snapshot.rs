@@ -305,6 +305,7 @@ pub fn replay_wal_entries(
                                 taker_address: fill.taker_address.clone(),
                                 timestamp: entry.timestamp_ns / 1_000_000,
                                 side: String::new(),
+                                synthetic: false,
                             };
                             if let Some(order) = recovered_orders.get_mut(&fill.taker_order_id) {
                                 order.fills.push(OrderFillRecord {

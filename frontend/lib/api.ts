@@ -220,7 +220,7 @@ export async function fetchOHLCV(
   marketId: string,
   timeframe: string = '1H',
   limit: number = 200,
-): Promise<{ candles: OHLCVCandle[]; hasRealData: boolean }> {
+): Promise<{ candles: OHLCVCandle[]; hasRealData: boolean; hasLivePrices: boolean }> {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'https://vela-engine.fly.dev'
   try {
     const res = await fetch(
@@ -228,13 +228,14 @@ export async function fetchOHLCV(
       { cache: 'no-store' },
     )
     const data = await res.json()
-    if (!data.ok) return { candles: [], hasRealData: false }
+    if (!data.ok) return { candles: [], hasRealData: false, hasLivePrices: false }
     return {
       candles: data.data.candles,
       hasRealData: data.data.has_real_data,
+      hasLivePrices: data.data.has_live_prices ?? false,
     }
   } catch {
-    return { candles: [], hasRealData: false }
+    return { candles: [], hasRealData: false, hasLivePrices: false }
   }
 }
 

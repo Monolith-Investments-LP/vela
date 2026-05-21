@@ -26,6 +26,7 @@ import { ORDERED_PAIRS, getMarketInfo, pairChange, getPriceDecimals } from '@/li
 type OrderSide = 'buy' | 'sell'
 type OrderEntryType = 'limit' | 'market' | 'stop'
 type Timeframe = '1m' | '5m' | '15m' | '1H' | '4H' | '1D'
+type LiveMode = 'data' | 'prices' | 'simulated' | null
 
 interface Toast {
   id: number
@@ -194,7 +195,14 @@ function TopBar({ pair, market }: { pair: string; market: MarketResponse | undef
 
 const TIMEFRAMES: Timeframe[] = ['1m', '5m', '15m', '1H', '4H', '1D']
 
-function TimeframeRow({ timeframe, onChange, isLive }: { timeframe: Timeframe; onChange: (tf: Timeframe) => void; isLive: boolean | null }) {
+function TimeframeRow({ timeframe, onChange, isLive }: { timeframe: Timeframe; onChange: (tf: Timeframe) => void; isLive: LiveMode }) {
+  const liveLabel =
+    isLive === 'data' ? '● LIVE DATA' :
+    isLive === 'prices' ? '● LIVE PRICES' :
+    isLive === 'simulated' ? '○ SIMULATED' : null
+  const liveColor =
+    isLive === 'data' || isLive === 'prices' ? '#6B8A5A' : 'rgba(232,228,216,0.25)'
+
   return (
     <div style={{ display: 'flex', padding: '8px 16px 0', borderBottom: '1px solid rgba(232,228,216,0.06)', flexShrink: 0, alignItems: 'center' }}>
       {TIMEFRAMES.map((tf) => (
@@ -218,7 +226,7 @@ function TimeframeRow({ timeframe, onChange, isLive }: { timeframe: Timeframe; o
           {tf}
         </button>
       ))}
-      {isLive !== null && (
+      {liveLabel !== null && (
         <span style={{
           marginLeft: 'auto',
           marginBottom: 8,
@@ -226,35 +234,40 @@ function TimeframeRow({ timeframe, onChange, isLive }: { timeframe: Timeframe; o
           fontSize: 8,
           textTransform: 'uppercase',
           letterSpacing: '0.1em',
-          color: isLive ? '#6B8A5A' : 'rgba(232,228,216,0.25)',
+          color: liveColor,
         }}>
-          {isLive ? '● LIVE DATA' : '○ SIMULATED'}
+          {liveLabel}
         </span>
       )}
     </div>
   )
 }
 
-async function getChartCandles(pair: string, timeframe: string): Promise<CandlestickData<Time>[]> {
-  const { candles, hasRealData } = await fetchOHLCV(pair, timeframe, 200)
-  if (!hasRealData || candles.length < 2) return []
-  return candles.map((c) => ({
-    time: c.time as Time,
-    open: c.open,
-    high: c.high,
-    low: c.low,
-    close: c.close,
-  }))
+async function getChartCandles(pair: string, timeframe: string): Promise<{ candles: CandlestickData<Time>[]; hasRealData: boolean; hasLivePrices: boolean }> {
+  const { candles, hasRealData, hasLivePrices } = await fetchOHLCV(pair, timeframe, 200)
+  if ((!hasRealData && !hasLivePrices) || candles.length < 2)
+    return { candles: [], hasRealData: false, hasLivePrices: false }
+  return {
+    candles: candles.map((c) => ({
+      time: c.time as Time,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    })),
+    hasRealData,
+    hasLivePrices,
+  }
 }
 
-function ChartArea({ pair, midPrice, timeframe, onLiveChange }: { pair: string; midPrice: number | null; timeframe: Timeframe; onLiveChange: (isLive: boolean) => void }) {
+function ChartArea({ pair, midPrice, timeframe, onLiveChange }: { pair: string; midPrice: number | null; timeframe: Timeframe; onLiveChange: (isLive: LiveMode) => void }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick', Time> | null>(null)
   const midPriceRef = useRef<number | null>(null)
   const timeframeRef = useRef<Timeframe>(timeframe)
   const pairRef = useRef<string>(pair)
-  const isLiveRef = useRef<boolean>(false)
+  const isLiveRef = useRef<LiveMode>(null)
 
   useEffect(() => { midPriceRef.current = midPrice }, [midPrice])
   useEffect(() => { timeframeRef.current = timeframe }, [timeframe])
@@ -317,21 +330,22 @@ function ChartArea({ pair, midPrice, timeframe, onLiveChange }: { pair: string; 
     let cancelled = false
 
     async function load() {
-      const realCandles = await getChartCandles(pair, timeframe)
+      const { candles: realCandles, hasRealData, hasLivePrices } = await getChartCandles(pair, timeframe)
       if (cancelled) return
 
       if (realCandles.length >= 2) {
         const sorted = [...realCandles].sort((a, b) => (a.time as number) - (b.time as number))
         seriesRef.current?.setData(sorted)
         chartRef.current?.timeScale().fitContent()
-        isLiveRef.current = true
-        onLiveChange(true)
+        const mode: LiveMode = hasRealData ? 'data' : 'prices'
+        isLiveRef.current = mode
+        onLiveChange(mode)
       } else {
         const price = midPriceRef.current ?? 100
         seriesRef.current?.setData(generateCandles(price, timeframe))
         chartRef.current?.timeScale().fitContent()
-        isLiveRef.current = false
-        onLiveChange(false)
+        isLiveRef.current = 'simulated'
+        onLiveChange('simulated')
       }
     }
 
@@ -340,7 +354,7 @@ function ChartArea({ pair, midPrice, timeframe, onLiveChange }: { pair: string; 
   }, [timeframe, pair, onLiveChange])
 
   useEffect(() => {
-    if (midPrice && !isLiveRef.current && seriesRef.current) {
+    if (midPrice && (isLiveRef.current === null || isLiveRef.current === 'simulated') && seriesRef.current) {
       seriesRef.current.setData(generateCandles(midPrice, timeframeRef.current))
       chartRef.current?.timeScale().fitContent()
     }
@@ -369,9 +383,9 @@ function ChartArea({ pair, midPrice, timeframe, onLiveChange }: { pair: string; 
             low: candle.low,
             close: candle.close,
           })
-          if (!isLiveRef.current) {
-            isLiveRef.current = true
-            onLiveChange(true)
+          if (isLiveRef.current === null || isLiveRef.current === 'simulated') {
+            isLiveRef.current = 'prices'
+            onLiveChange('prices')
           }
         } catch { /* ignore malformed messages */ }
       }
@@ -499,8 +513,8 @@ function OpenOrdersPanel({ pair, onToast }: { pair: string; onToast: (msg: strin
 
 function ChartColumn({ pair, midPrice, onToast }: { pair: string; midPrice: number | null; onToast: (msg: string, v: 'success' | 'error') => void }) {
   const [timeframe, setTimeframe] = useState<Timeframe>('1H')
-  const [isLive, setIsLive] = useState<boolean | null>(null)
-  const handleLiveChange = useCallback((live: boolean) => setIsLive(live), [])
+  const [isLive, setIsLive] = useState<LiveMode>(null)
+  const handleLiveChange = useCallback((live: LiveMode) => setIsLive(live), [])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', borderRight: '1px solid rgba(232,228,216,0.07)', overflow: 'hidden' }}>
