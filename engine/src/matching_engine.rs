@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use types::{
     AssetId, Balance, CancelOrderRequest, DepositRequest, ErrorCode, ErrorResponse, FeeConfig,
     Fill, Market, MarketId, Order, OrderCanceledResponse, OrderId, OrderPostedResponse, OrderSide,
@@ -24,6 +25,10 @@ pub struct MatchingEngine {
     /// Interior-mutable toxicity scorer; updated on every taker fill without
     /// requiring &mut self in match_order (which is called from &self context).
     toxicity_scorer: RefCell<ToxicityScorer>,
+    /// Used by MarketShards sharded dispatch to inject a shared balance snapshot.
+    /// When Some, DeltaBuffer base calls use this instead of self.balances.
+    pub(crate) snapshot_balances: Option<Arc<HashMap<(UserId, AssetId), Balance>>>,
+    pub(crate) snapshot_metadata: Option<Arc<HashMap<UserId, UserMetadata>>>,
 }
 
 impl MatchingEngine {
@@ -39,6 +44,8 @@ impl MatchingEngine {
             timestamp: 0,
             next_order_id: 1,
             toxicity_scorer: RefCell::new(ToxicityScorer::new()),
+            snapshot_balances: None,
+            snapshot_metadata: None,
         }
     }
 
@@ -134,6 +141,9 @@ impl MatchingEngine {
             return vec![];
         }
 
+        let bal_base: &HashMap<(UserId, AssetId), Balance> =
+            self.snapshot_balances.as_deref().unwrap_or(&self.balances);
+
         let mut candidates: Vec<ExpiryCandidate> =
             meta.iter_order_ids().filter_map(|oid| {
                 for (mid, book) in &self.order_books {
@@ -165,7 +175,7 @@ impl MatchingEngine {
                 OrderSide::Ask => (market.base, remaining),
             };
             delta.record_remove(market_id, oid);
-            delta.unlock_to_available(user, &cancel_asset, unlock_amount, &self.balances);
+            delta.unlock_to_available(user, &cancel_asset, unlock_amount, bal_base);
             meta.remove_order_id(oid);
             meta.total_quoted_notional = meta.total_quoted_notional.saturating_sub(notional);
             responses.push(Response::OrderCanceled(OrderCanceledResponse {
@@ -206,7 +216,12 @@ impl MatchingEngine {
             }
         }
 
-        let mut meta = delta.get_metadata(&req.user, &self.metadata);
+        let meta_base: &HashMap<UserId, UserMetadata> =
+            self.snapshot_metadata.as_deref().unwrap_or(&self.metadata);
+        let bal_base: &HashMap<(UserId, AssetId), Balance> =
+            self.snapshot_balances.as_deref().unwrap_or(&self.balances);
+
+        let mut meta = delta.get_metadata(&req.user, meta_base);
         if !meta.nonce_window.accept(req.nonce) {
             return Err(VelaError::InvalidNonce);
         }
@@ -216,7 +231,7 @@ impl MatchingEngine {
             OrderSide::Ask => (market.base, market.quote),
         };
 
-        let spend_balance = delta.get_balance(&req.user, &spend_asset, &self.balances);
+        let spend_balance = delta.get_balance(&req.user, &spend_asset, bal_base);
 
         let order_notional = match req.side {
             OrderSide::Bid => CreditSystem::compute_notional(req.price, req.quantity),
@@ -280,7 +295,7 @@ impl MatchingEngine {
                 OrderSide::Bid => CreditSystem::compute_notional(req.price, remaining),
                 OrderSide::Ask => remaining,
             };
-            delta.lock_available(&req.user, &spend_asset, resting_spend, &self.balances);
+            delta.lock_available(&req.user, &spend_asset, resting_spend, bal_base);
             order.status = if total_filled > 0 { OrderStatus::PartiallyFilled } else { OrderStatus::Open };
             meta.push_order_id(order.id);
             meta.total_quoted_notional += CreditSystem::compute_notional(req.price, remaining);
@@ -313,6 +328,9 @@ impl MatchingEngine {
         market: &Market,
         delta: &mut DeltaBuffer,
     ) -> Result<(Vec<Fill>, Vec<OrderCanceledResponse>), VelaError> {
+        let meta_base: &HashMap<UserId, UserMetadata> =
+            self.snapshot_metadata.as_deref().unwrap_or(&self.metadata);
+
         let book = match self.order_books.get(&order.market) {
             Some(b) => b,
             None => return Ok((vec![], vec![])),
@@ -378,7 +396,7 @@ impl MatchingEngine {
                 let is_bid_maker = resting.side == OrderSide::Bid;
                 if fully_consumed {
                     delta.record_remove(order.market.clone(), resting.id);
-                    let mut maker_meta = delta.get_metadata(&resting.user, &self.metadata);
+                    let mut maker_meta = delta.get_metadata(&resting.user, meta_base);
                     maker_meta.remove_order_id(resting.id);
                     let resting_notional = CreditSystem::compute_notional(resting.price, resting.remaining_quantity());
                     maker_meta.total_quoted_notional =
@@ -390,7 +408,7 @@ impl MatchingEngine {
                     delta.set_metadata(maker_meta);
                 } else {
                     delta.record_partial_fill(order.market.clone(), resting.id, fill_qty);
-                    let mut maker_meta = delta.get_metadata(&resting.user, &self.metadata);
+                    let mut maker_meta = delta.get_metadata(&resting.user, meta_base);
                     maker_meta.total_quoted_notional = maker_meta.total_quoted_notional
                         .saturating_sub(CreditSystem::compute_notional(resting.price, fill_qty));
                     if is_bid_maker {
@@ -438,7 +456,7 @@ impl MatchingEngine {
 
         if order.side == OrderSide::Ask {
             for maker_user in &affected_makers {
-                let mut maker_meta = delta.get_metadata(maker_user, &self.metadata);
+                let mut maker_meta = delta.get_metadata(maker_user, meta_base);
                 let maker_deposited = maker_meta.actual_collateral;
 
                 let open_orders: Vec<(OrderId, u64)> = maker_meta
@@ -474,12 +492,14 @@ impl MatchingEngine {
                             let notional = CreditSystem::compute_notional(o.price, remaining);
                             let unlock_amt = CreditSystem::compute_notional(o.price, remaining);
 
+                            let bal_base_inner: &HashMap<(UserId, AssetId), Balance> =
+                                self.snapshot_balances.as_deref().unwrap_or(&self.balances);
                             delta.record_remove(o.market.clone(), oid);
                             delta.unlock_to_available(
                                 maker_user,
                                 &market.quote,
                                 unlock_amt,
-                                &self.balances,
+                                bal_base_inner,
                             );
                             maker_meta.remove_order_id(oid);
                             maker_meta.total_quoted_notional =
@@ -502,35 +522,39 @@ impl MatchingEngine {
     }
 
     fn apply_fill_balances(&self, fill: &Fill, market: &Market, delta: &mut DeltaBuffer) {
+        let bal_base: &HashMap<(UserId, AssetId), Balance> =
+            self.snapshot_balances.as_deref().unwrap_or(&self.balances);
+        let meta_base: &HashMap<UserId, UserMetadata> =
+            self.snapshot_metadata.as_deref().unwrap_or(&self.metadata);
         let fill_notional = CreditSystem::compute_notional(fill.price, fill.quantity);
 
         match fill.side {
             OrderSide::Bid => {
-                delta.debit_locked(&fill.taker, &market.quote, fill_notional, &self.balances);
-                delta.credit_available(&fill.taker, &market.base, fill.quantity, &self.balances);
+                delta.debit_locked(&fill.taker, &market.quote, fill_notional, bal_base);
+                delta.credit_available(&fill.taker, &market.base, fill.quantity, bal_base);
                 if fill.taker_fee > 0 {
-                    delta.debit_available(&fill.taker, &market.quote, fill.taker_fee as u64, &self.balances);
+                    delta.debit_available(&fill.taker, &market.quote, fill.taker_fee as u64, bal_base);
                 }
-                delta.debit_locked(&fill.maker, &market.base, fill.quantity, &self.balances);
-                delta.credit_available(&fill.maker, &market.quote, fill_notional, &self.balances);
+                delta.debit_locked(&fill.maker, &market.base, fill.quantity, bal_base);
+                delta.credit_available(&fill.maker, &market.quote, fill_notional, bal_base);
                 if fill.maker_fee < 0 {
-                    delta.credit_available(&fill.maker, &market.quote, fill.maker_fee.unsigned_abs(), &self.balances);
+                    delta.credit_available(&fill.maker, &market.quote, fill.maker_fee.unsigned_abs(), bal_base);
                 } else if fill.maker_fee > 0 {
-                    delta.debit_available(&fill.maker, &market.quote, fill.maker_fee as u64, &self.balances);
+                    delta.debit_available(&fill.maker, &market.quote, fill.maker_fee as u64, bal_base);
                 }
             }
             OrderSide::Ask => {
-                delta.debit_locked(&fill.taker, &market.base, fill.quantity, &self.balances);
-                delta.credit_available(&fill.taker, &market.quote, fill_notional, &self.balances);
+                delta.debit_locked(&fill.taker, &market.base, fill.quantity, bal_base);
+                delta.credit_available(&fill.taker, &market.quote, fill_notional, bal_base);
                 if fill.taker_fee > 0 {
-                    delta.debit_available(&fill.taker, &market.quote, fill.taker_fee as u64, &self.balances);
+                    delta.debit_available(&fill.taker, &market.quote, fill.taker_fee as u64, bal_base);
                 }
-                delta.debit_locked(&fill.maker, &market.quote, fill_notional, &self.balances);
-                delta.credit_available(&fill.maker, &market.base, fill.quantity, &self.balances);
+                delta.debit_locked(&fill.maker, &market.quote, fill_notional, bal_base);
+                delta.credit_available(&fill.maker, &market.base, fill.quantity, bal_base);
                 if fill.maker_fee < 0 {
-                    delta.credit_available(&fill.maker, &market.quote, fill.maker_fee.unsigned_abs(), &self.balances);
+                    delta.credit_available(&fill.maker, &market.quote, fill.maker_fee.unsigned_abs(), bal_base);
                 } else if fill.maker_fee > 0 {
-                    delta.debit_available(&fill.maker, &market.quote, fill.maker_fee as u64, &self.balances);
+                    delta.debit_available(&fill.maker, &market.quote, fill.maker_fee as u64, bal_base);
                 }
             }
         }
@@ -539,14 +563,14 @@ impl MatchingEngine {
         delta.add_exchange_fee(market.quote.as_str(), net_exchange_fee);
 
         if fill.taker_fee > 0 {
-            let taker_meta = delta.get_metadata(&fill.taker, &self.metadata);
+            let taker_meta = delta.get_metadata(&fill.taker, meta_base);
             if let Some(ref_hex) = taker_meta.ref_by {
                 if let Ok(ref_user) = UserId::from_hex(&ref_hex) {
                     let referral_amount = (fill.taker_fee as u64) / 5;
                     if referral_amount > 0 {
-                        delta.credit_available(&ref_user, &market.quote, referral_amount, &self.balances);
+                        delta.credit_available(&ref_user, &market.quote, referral_amount, bal_base);
                         delta.add_exchange_fee(market.quote.as_str(), -(referral_amount as i64));
-                        let mut ref_meta = delta.get_metadata(&ref_user, &self.metadata);
+                        let mut ref_meta = delta.get_metadata(&ref_user, meta_base);
                         ref_meta.ref_earnings = ref_meta.ref_earnings.saturating_add(referral_amount);
                         delta.set_metadata(ref_meta);
                     }
@@ -709,6 +733,18 @@ impl MatchingEngine {
 
     pub fn set_next_order_id(&mut self, id: OrderId) {
         self.next_order_id = id;
+    }
+
+    /// Inject shared balance/metadata snapshots for sharded dispatch.
+    /// When set, the engine uses these as the base for all DeltaBuffer lookups
+    /// instead of self.balances / self.metadata.
+    pub fn set_snapshot(
+        &mut self,
+        balances: Option<Arc<HashMap<(UserId, AssetId), Balance>>>,
+        metadata: Option<Arc<HashMap<UserId, UserMetadata>>>,
+    ) {
+        self.snapshot_balances = balances;
+        self.snapshot_metadata = metadata;
     }
 
     /// Process a batch of requests under a single mutable borrow (i.e., under

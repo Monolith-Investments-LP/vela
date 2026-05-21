@@ -1,6 +1,4 @@
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use engine::MatchingEngine;
+use engine::batch_dispatcher::BatchedRequest;
 use types::{MarketId, OrderSide, OrderType, PostOrderRequest, Request, UserId};
 
 static MARKETS: &[(&str, &str, f64)] = &[
@@ -22,7 +20,7 @@ static MARKETS: &[(&str, &str, f64)] = &[
     ("EIGEN-USDC", "eigenlayer", 200.0),
 ];
 
-pub async fn run_mm_bot(engine: Arc<Mutex<MatchingEngine>>) {
+pub async fn run_mm_bot(order_tx: tokio::sync::mpsc::Sender<BatchedRequest>) {
     let client = reqwest::Client::new();
     let mut iteration: u64 = 0;
 
@@ -81,10 +79,10 @@ pub async fn run_mm_bot(engine: Arc<Mutex<MatchingEngine>>) {
             let mut bid_price = mid.saturating_sub(half_spread);
             for i in 0u64..10 {
                 let quantity = ((i % 5) + 3) * base_qty;
-                {
-                    let mut eng = engine.lock().await;
-                    eng.process(
-                        Request::PostOrder(PostOrderRequest {
+                let (responder, _resp_rx) = tokio::sync::oneshot::channel();
+                let _ = order_tx
+                    .send(BatchedRequest {
+                        request: Request::PostOrder(PostOrderRequest {
                             user: seed_user.clone(),
                             market: MarketId(market_name.to_string()),
                             side: OrderSide::Bid,
@@ -96,8 +94,10 @@ pub async fn run_mm_bot(engine: Arc<Mutex<MatchingEngine>>) {
                             signature: vec![],
                         }),
                         ts,
-                    );
-                }
+                        responder,
+                        decryption_proof: None,
+                    })
+                    .await;
                 nonce += 1;
                 bid_price = bid_price * 9_995 / 10_000;
             }
@@ -105,10 +105,10 @@ pub async fn run_mm_bot(engine: Arc<Mutex<MatchingEngine>>) {
             let mut ask_price = mid + half_spread;
             for i in 0u64..10 {
                 let quantity = ((i % 5) + 3) * base_qty;
-                {
-                    let mut eng = engine.lock().await;
-                    eng.process(
-                        Request::PostOrder(PostOrderRequest {
+                let (responder, _resp_rx) = tokio::sync::oneshot::channel();
+                let _ = order_tx
+                    .send(BatchedRequest {
+                        request: Request::PostOrder(PostOrderRequest {
                             user: seed_user.clone(),
                             market: MarketId(market_name.to_string()),
                             side: OrderSide::Ask,
@@ -120,8 +120,10 @@ pub async fn run_mm_bot(engine: Arc<Mutex<MatchingEngine>>) {
                             signature: vec![],
                         }),
                         ts,
-                    );
-                }
+                        responder,
+                        decryption_proof: None,
+                    })
+                    .await;
                 nonce += 1;
                 ask_price = ask_price * 10_005 / 10_000;
             }

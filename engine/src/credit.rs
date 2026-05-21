@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use types::{OrderId, Price, Quantity, UserId, VelaError, PRICE_SCALE, QUANTITY_SCALE};
 
 /// Time-bounded credit multiplier applied to a maker after a toxic taker fill.
+#[derive(Clone)]
 pub struct CreditPenalty {
     /// Expiry in microseconds (same unit as engine timestamp).
     pub expires_at: u64,
@@ -9,6 +10,7 @@ pub struct CreditPenalty {
     pub multiplier: f64,
 }
 
+#[derive(Clone)]
 pub struct CreditSystem {
     credit_ratios: HashMap<UserId, f64>,
     default_ratio: f64,

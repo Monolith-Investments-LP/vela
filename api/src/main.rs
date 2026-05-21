@@ -314,9 +314,9 @@ async fn main() {
         tracing::warn!("OPERATOR_PRIVATE_KEY not set — anchor task disabled");
     }
 
-    let engine_arc = Arc::clone(&state.engine);
+    let mm_order_tx = state.order_tx.clone();
     tokio::spawn(async move {
-        api::mm::run_mm_bot(engine_arc).await;
+        api::mm::run_mm_bot(mm_order_tx).await;
     });
 
     let snapshot_state = Arc::clone(&state);

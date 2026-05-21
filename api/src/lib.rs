@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tokio::sync::Mutex;
-use engine::{BatchDispatcher, BatchMetrics, MatchingEngine};
+use engine::{BatchMetrics, MatchingEngine, MarketShards, UserState};
 use engine::batch_dispatcher::BatchedRequest;
 use feeds::FeedManager;
 use rate_limit::RateLimiter;
@@ -33,6 +33,7 @@ pub use engine::batch_dispatcher::BatchedRequest as OrderChannelItem;
 
 pub struct AppState {
     pub engine: Arc<Mutex<MatchingEngine>>,
+    pub shards: Arc<MarketShards>,
     pub feeds: Arc<Mutex<FeedManager>>,
     pub order_limiter: Arc<RateLimiter>,
     pub deposit_limiter: Arc<RateLimiter>,
@@ -90,6 +91,30 @@ impl AppState {
             .unwrap_or(256);
 
         let (order_tx, order_rx) = tokio::sync::mpsc::channel::<BatchedRequest>(1024);
+
+        // Build UserState and MarketShards from engine
+        let mut user_state = UserState::new(5.0);
+        user_state.sync_from_engine(&engine);
+        let user_state_arc = Arc::new(tokio::sync::RwLock::new(user_state));
+        let mut shards_builder = MarketShards::new(Arc::clone(&user_state_arc));
+        for (market_id, market) in &engine.markets {
+            let mut shard_engine = MatchingEngine::new(engine.fee_config.clone(), 5.0);
+            // Copy over everything from the main engine for this market
+            shard_engine.add_market(market.clone());
+            shard_engine.balances = engine.balances.clone();
+            shard_engine.metadata = engine.metadata.clone();
+            shard_engine.fee_balances = engine.fee_balances.clone();
+            shard_engine.set_next_order_id(engine.next_order_id());
+            // Copy order book for this market
+            if let Some(book) = engine.order_books.get(market_id) {
+                for order in book.all_orders() {
+                    let _ = shard_engine.order_books.get_mut(market_id).map(|b| b.insert_resting(order));
+                }
+            }
+            shards_builder.add_shard(market_id.clone(), shard_engine);
+        }
+        let shards_arc = Arc::new(shards_builder);
+
         let engine_arc = Arc::new(Mutex::new(engine));
         let (ws_bcast_tx, _) = tokio::sync::broadcast::channel::<WsEnvelope>(4096);
 
@@ -141,6 +166,7 @@ impl AppState {
 
         let state = Arc::new(AppState {
             engine: Arc::clone(&engine_arc),
+            shards: Arc::clone(&shards_arc),
             feeds: Arc::new(Mutex::new(FeedManager::new())),
             order_limiter: Arc::new(RateLimiter::new(20, 60)),
             deposit_limiter: Arc::new(RateLimiter::new(5, 60)),
@@ -182,8 +208,14 @@ impl AppState {
             batch_metrics: Arc::clone(&batch_metrics),
         });
 
-        let dispatcher = BatchDispatcher::new(window_us, max_batch_size);
-        tokio::spawn(dispatcher.run(order_rx, Arc::clone(&engine_arc), batch_metrics, None));
+        tokio::spawn(MarketShards::run(
+            Arc::clone(&shards_arc),
+            order_rx,
+            window_us,
+            max_batch_size,
+            Arc::clone(&batch_metrics),
+            None,
+        ));
         tokio::spawn(ws::run_background_task(Arc::clone(&state)));
         tokio::spawn(midnight_reset_task(Arc::clone(&state)));
         tokio::spawn(committee_handler::eviction_task(pending_encrypted, Arc::clone(&state)));

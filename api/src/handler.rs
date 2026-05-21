@@ -855,9 +855,19 @@ async fn cancel_order(
         .unwrap_or_default()
         .as_micros() as u64;
 
-    let responses = {
-        let mut engine = state.engine.lock().await;
-        engine.process(EngineRequest::CancelOrder(req), ts)
+    let (responder, resp_rx) = tokio::sync::oneshot::channel();
+    let channel_item = engine::batch_dispatcher::BatchedRequest {
+        request: EngineRequest::CancelOrder(req),
+        ts,
+        responder,
+        decryption_proof: None,
+    };
+    if state.order_tx.send(channel_item).await.is_err() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
+    }
+    let responses = match resp_rx.await {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
     };
 
     state.feeds.lock().await.dispatch_response_batch(&user, &responses);
@@ -917,9 +927,19 @@ async fn initiate_withdrawal(
         .unwrap_or_default()
         .as_micros() as u64;
 
-    let responses = {
-        let mut engine = state.engine.lock().await;
-        engine.process(EngineRequest::Withdrawal(req), ts)
+    let (responder, resp_rx) = tokio::sync::oneshot::channel();
+    let channel_item = engine::batch_dispatcher::BatchedRequest {
+        request: EngineRequest::Withdrawal(req),
+        ts,
+        responder,
+        decryption_proof: None,
+    };
+    if state.order_tx.send(channel_item).await.is_err() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
+    }
+    let responses = match resp_rx.await {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
     };
 
     state.feeds.lock().await.dispatch_response_batch(&user, &responses);
@@ -999,9 +1019,19 @@ async fn deposit_handler(
         l1_tx_hash,
     };
 
-    let responses = {
-        let mut engine = state.engine.lock().await;
-        engine.process(EngineRequest::Deposit(req), ts)
+    let (responder, resp_rx) = tokio::sync::oneshot::channel();
+    let channel_item = engine::batch_dispatcher::BatchedRequest {
+        request: EngineRequest::Deposit(req),
+        ts,
+        responder,
+        decryption_proof: None,
+    };
+    if state.order_tx.send(channel_item).await.is_err() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
+    }
+    let responses = match resp_rx.await {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
     };
 
     state.feeds.lock().await.dispatch_response_batch(&user, &responses);
@@ -1206,11 +1236,20 @@ async fn force_include_handler(
         }
     };
 
-    // Process directly through the engine — bypasses rate limiting, signature
-    // verification, and the order channel (forced requests are not PostOrder).
-    let responses = {
-        let mut engine = state.engine.lock().await;
-        engine.process(request, ts)
+    // Process through the sharded dispatcher.
+    let (responder, resp_rx) = tokio::sync::oneshot::channel();
+    let channel_item = engine::batch_dispatcher::BatchedRequest {
+        request,
+        ts,
+        responder,
+        decryption_proof: None,
+    };
+    if state.order_tx.send(channel_item).await.is_err() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
+    }
+    let responses = match resp_rx.await {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
     };
 
     state
