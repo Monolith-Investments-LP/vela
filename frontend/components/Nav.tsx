@@ -11,6 +11,7 @@ const LINKS = [
   { href: '/markets',      label: 'Markets'      },
   { href: '/dashboard',    label: 'Dashboard'    },
   { href: '/analytics',    label: 'Analytics'    },
+  { href: '/benchmarks',   label: 'Benchmarks'   },
   { href: '/history',      label: 'History'      },
   { href: '/transparency', label: 'Transparency' },
   { href: '/decisions',    label: 'Decisions'    },

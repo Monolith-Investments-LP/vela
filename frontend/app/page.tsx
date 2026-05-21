@@ -297,19 +297,40 @@ export default function HomePage() {
             ))}
           </div>
         </div>
-        <p
-          style={{
-            fontFamily: IN,
-            fontSize: '10px',
-            color: 'rgba(12,12,12,0.3)',
-            marginTop: '20px',
-            lineHeight: 1.6,
-          }}
-        >
-          ¹ Hyperliquid figure is a published design ceiling for the execution layer. See{' '}
-          <a href="https://github.com/arpjw/vela/blob/main/docs/benchmarks.md" style={{ color: 'rgba(12,12,12,0.45)', textDecoration: 'underline' }}>benchmarks</a>{' '}
-          for full methodology.
-        </p>
+        <div style={{ marginTop: '20px', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+          <p
+            style={{
+              fontFamily: IN,
+              fontSize: '10px',
+              color: 'rgba(12,12,12,0.3)',
+              margin: 0,
+              lineHeight: 1.6,
+            }}
+          >
+            ¹ Hyperliquid figure is a published design ceiling for the execution layer. See{' '}
+            <a href="https://github.com/arpjw/vela/blob/main/docs/benchmarks.md" style={{ color: 'rgba(12,12,12,0.45)', textDecoration: 'underline' }}>benchmarks</a>{' '}
+            for full methodology.
+          </p>
+          <a
+            href="/benchmarks"
+            style={{
+              fontFamily: IN,
+              fontWeight: 600,
+              fontSize: '10px',
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+              color: 'rgba(12,12,12,0.55)',
+              textDecoration: 'none',
+              whiteSpace: 'nowrap',
+              borderBottom: '1px solid rgba(12,12,12,0.2)',
+              paddingBottom: '1px',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = '#0C0C0C')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(12,12,12,0.55)')}
+          >
+            VIEW BENCHMARKS →
+          </a>
+        </div>
       </section>
 
       <section
