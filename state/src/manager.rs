@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use types::{AssetId, Balance, MarketId, Request, Response, UserId, UserMetadata};
+use types::{AssetId, Balance, Request, Response, UserId, UserMetadata};
 use crate::cache::StateCache;
 use crate::keys::StateKey;
 use crate::mpt::{Hash, MptStore};
@@ -47,7 +47,7 @@ impl StateManager {
 
     pub fn observe_balance_change(&mut self, user: &UserId, asset: &AssetId, balance: &Balance) {
         self.cache.set_balance(balance);
-        let key = crate::keys::StateKey::Balance { user: user.clone(), asset: asset.clone() }.encode();
+        let key = crate::keys::StateKey::Balance { user: user.clone(), asset: *asset }.encode();
         let val = serde_json::to_vec(balance).unwrap_or_default();
         self.smt.insert(key, val);
     }
@@ -68,10 +68,10 @@ impl StateManager {
         balances: &HashMap<(UserId, AssetId), Balance>,
         metadata: &HashMap<UserId, UserMetadata>,
     ) -> Hash {
-        for ((user, asset), balance) in balances {
+        for balance in balances.values() {
             self.cache.set_balance(balance);
         }
-        for (user, meta) in metadata {
+        for meta in metadata.values() {
             self.cache.set_metadata(meta);
         }
 

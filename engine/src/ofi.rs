@@ -29,6 +29,10 @@ pub struct OfiAccumulator {
     abs_sum: i64,
 }
 
+impl Default for OfiAccumulator {
+    fn default() -> Self { Self::new() }
+}
+
 impl OfiAccumulator {
     pub const fn new() -> Self {
         Self {
@@ -107,7 +111,7 @@ impl ToxicityScorer {
         total_fill_qty: u64,
         walked_book: bool,
     ) -> (f64, i64) {
-        let acc = self.accumulators.entry(market.clone()).or_insert_with(OfiAccumulator::new);
+        let acc = self.accumulators.entry(market.clone()).or_default();
         acc.push(signed_qty);
 
         let ofi_imbalance = acc.imbalance();

@@ -26,14 +26,14 @@ impl CowCache {
         base: &'a HashMap<(UserId, AssetId), Balance>,
     ) -> Balance {
         self.balance_overlay
-            .get(&(user.clone(), asset.clone()))
-            .or_else(|| base.get(&(user.clone(), asset.clone())))
+            .get(&(user.clone(), *asset))
+            .or_else(|| base.get(&(user.clone(), *asset)))
             .cloned()
-            .unwrap_or_else(|| Balance { user: user.clone(), asset: asset.clone(), available: 0, locked: 0 })
+            .unwrap_or_else(|| Balance { user: user.clone(), asset: *asset, available: 0, locked: 0 })
     }
 
     pub fn set_balance(&mut self, balance: Balance) {
-        let key = (balance.user.clone(), balance.asset.clone());
+        let key = (balance.user.clone(), balance.asset);
         self.balance_overlay.insert(key, balance);
     }
 

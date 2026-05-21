@@ -17,7 +17,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tokio::sync::Mutex;
-use engine::MatchingEngine;
+use engine::{BatchDispatcher, BatchMetrics, MatchingEngine};
+use engine::batch_dispatcher::BatchedRequest;
 use feeds::FeedManager;
 use rate_limit::RateLimiter;
 use crate::types::{AnchorRecord, Decision, Incident, RegisteredMM, StoredFill, StoredOrder, WsEnvelope};
@@ -26,11 +27,8 @@ use tee::{AttestationRecord, TeeAttester};
 use committee::ThresholdDecryptor;
 use crate::committee_handler::PendingEncryptedOrders;
 
-pub struct OrderChannelItem {
-    pub req: ::types::PostOrderRequest,
-    pub ts: u64,
-    pub response_tx: tokio::sync::oneshot::Sender<Vec<::types::Response>>,
-}
+/// Re-export so that handler modules can use a stable local name.
+pub use engine::batch_dispatcher::BatchedRequest as OrderChannelItem;
 
 pub struct AppState {
     pub engine: Arc<Mutex<MatchingEngine>>,
@@ -41,7 +39,8 @@ pub struct AppState {
     pub start_time: std::time::Instant,
     pub fills: Arc<Mutex<Vec<StoredFill>>>,
     pub stored_orders: Arc<Mutex<HashMap<u64, StoredOrder>>>,
-    pub order_tx: tokio::sync::mpsc::Sender<OrderChannelItem>,
+    /// Sender side of the batch-dispatcher ingestion channel.
+    pub order_tx: tokio::sync::mpsc::Sender<BatchedRequest>,
     pub da: Arc<da::DaSubmitter>,
     pub ws_tx: Arc<tokio::sync::broadcast::Sender<WsEnvelope>>,
     pub ws_seqs: Arc<dashmap::DashMap<String, AtomicU64>>,
@@ -74,11 +73,22 @@ pub struct AppState {
     pub committee_keys: HashMap<u8, [u8; 32]>,
     pub committee_config: Arc<::types::CommitteeConfig>,
     pub decryption_proofs: Arc<Mutex<Vec<::types::DecryptionProof>>>,
+    /// Live batch-dispatcher metrics (batch_size histogram, latency, ops/sec).
+    pub batch_metrics: Arc<BatchMetrics>,
 }
 
 impl AppState {
     pub fn new(engine: MatchingEngine, wal: Arc<wal::Wal>) -> Arc<Self> {
-        let (order_tx, order_rx) = tokio::sync::mpsc::channel::<OrderChannelItem>(1024);
+        let window_us: u64 = std::env::var("VELA_BATCH_WINDOW_US")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(500);
+        let max_batch_size: usize = std::env::var("VELA_BATCH_MAX_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(256);
+
+        let (order_tx, order_rx) = tokio::sync::mpsc::channel::<BatchedRequest>(1024);
         let engine_arc = Arc::new(Mutex::new(engine));
         let (ws_bcast_tx, _) = tokio::sync::broadcast::channel::<WsEnvelope>(4096);
 
@@ -126,6 +136,8 @@ impl AppState {
             committee::ThresholdDecryptor::new(t, n),
         ));
 
+        let batch_metrics = BatchMetrics::new();
+
         let state = Arc::new(AppState {
             engine: Arc::clone(&engine_arc),
             feeds: Arc::new(Mutex::new(FeedManager::new())),
@@ -166,49 +178,16 @@ impl AppState {
             committee_keys,
             committee_config,
             decryption_proofs: Arc::new(Mutex::new(Vec::new())),
+            batch_metrics: Arc::clone(&batch_metrics),
         });
 
-        tokio::spawn(engine_order_task(order_rx, engine_arc));
+        let dispatcher = BatchDispatcher::new(window_us, max_batch_size);
+        tokio::spawn(dispatcher.run(order_rx, Arc::clone(&engine_arc), batch_metrics, None));
         tokio::spawn(ws::run_background_task(Arc::clone(&state)));
         tokio::spawn(midnight_reset_task(Arc::clone(&state)));
         tokio::spawn(committee_handler::eviction_task(pending_encrypted, Arc::clone(&state)));
 
         state
-    }
-}
-
-pub async fn engine_order_task(
-    mut rx: tokio::sync::mpsc::Receiver<OrderChannelItem>,
-    engine: Arc<Mutex<MatchingEngine>>,
-) {
-    use tokio::time::{timeout_at, Instant};
-    use std::time::Duration;
-    use ::types::Request;
-
-    loop {
-        let first = match rx.recv().await {
-            Some(item) => item,
-            None => break,
-        };
-
-        let mut batch = vec![first];
-        let deadline = Instant::now() + Duration::from_millis(1);
-
-        loop {
-            if batch.len() >= 50 {
-                break;
-            }
-            match timeout_at(deadline, rx.recv()).await {
-                Ok(Some(item)) => batch.push(item),
-                _ => break,
-            }
-        }
-
-        let mut eng = engine.lock().await;
-        for item in batch {
-            let responses = eng.process(Request::PostOrder(item.req), item.ts);
-            let _ = item.response_tx.send(responses);
-        }
     }
 }
 

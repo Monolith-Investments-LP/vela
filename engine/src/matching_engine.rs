@@ -9,6 +9,8 @@ use types::{
 use crate::{DeltaBuffer, CreditSystem, OrderBook};
 use crate::ofi::{ToxicityScorer, TOXICITY_PENALTY_THRESHOLD, CREDIT_PENALTY_MULTIPLIER, CREDIT_PENALTY_DURATION_US};
 
+type ExpiryCandidate = (Timestamp, OrderId, u64, MarketId, OrderSide, u64, u64, Option<String>);
+
 pub struct MatchingEngine {
     pub order_books: HashMap<MarketId, OrderBook>,
     pub balances: HashMap<(UserId, AssetId), Balance>,
@@ -64,13 +66,6 @@ impl MatchingEngine {
         let id = self.next_order_id;
         self.next_order_id += 1;
         id
-    }
-
-    fn get_balance(&self, user: &UserId, asset: &AssetId) -> Balance {
-        self.balances
-            .get(&(user.clone(), asset.clone()))
-            .cloned()
-            .unwrap_or_else(|| Balance { user: user.clone(), asset: asset.clone(), available: 0, locked: 0 })
     }
 
     fn get_metadata(&self, user: &UserId) -> UserMetadata {
@@ -139,7 +134,7 @@ impl MatchingEngine {
             return vec![];
         }
 
-        let mut candidates: Vec<(Timestamp, OrderId, u64, MarketId, OrderSide, u64, u64, Option<String>)> =
+        let mut candidates: Vec<ExpiryCandidate> =
             meta.iter_order_ids().filter_map(|oid| {
                 for (mid, book) in &self.order_books {
                     if let Some(o) = book.get_order(oid) {
@@ -166,8 +161,8 @@ impl MatchingEngine {
                 None => continue,
             };
             let (cancel_asset, unlock_amount) = match side {
-                OrderSide::Bid => (market.quote.clone(), CreditSystem::compute_notional(price, remaining)),
-                OrderSide::Ask => (market.base.clone(), remaining),
+                OrderSide::Bid => (market.quote, CreditSystem::compute_notional(price, remaining)),
+                OrderSide::Ask => (market.base, remaining),
             };
             delta.record_remove(market_id, oid);
             delta.unlock_to_available(user, &cancel_asset, unlock_amount, &self.balances);
@@ -217,8 +212,8 @@ impl MatchingEngine {
         }
 
         let (spend_asset, receive_asset) = match req.side {
-            OrderSide::Bid => (market.quote.clone(), market.base.clone()),
-            OrderSide::Ask => (market.base.clone(), market.quote.clone()),
+            OrderSide::Bid => (market.quote, market.base),
+            OrderSide::Ask => (market.base, market.quote),
         };
 
         let spend_balance = delta.get_balance(&req.user, &spend_asset, &self.balances);
@@ -519,7 +514,7 @@ impl MatchingEngine {
                 delta.debit_locked(&fill.maker, &market.base, fill.quantity, &self.balances);
                 delta.credit_available(&fill.maker, &market.quote, fill_notional, &self.balances);
                 if fill.maker_fee < 0 {
-                    delta.credit_available(&fill.maker, &market.quote, fill.maker_fee.unsigned_abs() as u64, &self.balances);
+                    delta.credit_available(&fill.maker, &market.quote, fill.maker_fee.unsigned_abs(), &self.balances);
                 } else if fill.maker_fee > 0 {
                     delta.debit_available(&fill.maker, &market.quote, fill.maker_fee as u64, &self.balances);
                 }
@@ -533,7 +528,7 @@ impl MatchingEngine {
                 delta.debit_locked(&fill.maker, &market.quote, fill_notional, &self.balances);
                 delta.credit_available(&fill.maker, &market.base, fill.quantity, &self.balances);
                 if fill.maker_fee < 0 {
-                    delta.credit_available(&fill.maker, &market.quote, fill.maker_fee.unsigned_abs() as u64, &self.balances);
+                    delta.credit_available(&fill.maker, &market.quote, fill.maker_fee.unsigned_abs(), &self.balances);
                 } else if fill.maker_fee > 0 {
                     delta.debit_available(&fill.maker, &market.quote, fill.maker_fee as u64, &self.balances);
                 }
@@ -596,10 +591,10 @@ impl MatchingEngine {
                 if let Some(market) = market {
                     let (spend_asset, spend_amount) = match order.side {
                         OrderSide::Bid => (
-                            market.quote.clone(),
+                            market.quote,
                             CreditSystem::compute_notional(order.price, order.remaining_quantity()),
                         ),
-                        OrderSide::Ask => (market.base.clone(), order.remaining_quantity()),
+                        OrderSide::Ask => (market.base, order.remaining_quantity()),
                     };
                     self.unlock_balance(&req.user, &spend_asset, spend_amount);
                 }
@@ -619,10 +614,10 @@ impl MatchingEngine {
     }
 
     fn unlock_balance(&mut self, user: &UserId, asset: &AssetId, amount: u64) {
-        let key = (user.clone(), asset.clone());
+        let key = (user.clone(), *asset);
         let bal = self.balances.entry(key).or_insert_with(|| Balance {
             user: user.clone(),
-            asset: asset.clone(),
+            asset: *asset,
             available: 0,
             locked: 0,
         });
@@ -638,10 +633,10 @@ impl MatchingEngine {
             self.metadata.insert(req.user.clone(), meta);
         }
 
-        let key = (req.user.clone(), req.asset.clone());
+        let key = (req.user.clone(), req.asset);
         let bal = self.balances.entry(key).or_insert_with(|| Balance {
             user: req.user.clone(),
-            asset: req.asset.clone(),
+            asset: req.asset,
             available: 0,
             locked: 0,
         });
@@ -662,10 +657,10 @@ impl MatchingEngine {
                 message: "invalid nonce".into(),
             })];
         }
-        let key = (req.user.clone(), req.asset.clone());
+        let key = (req.user.clone(), req.asset);
         let bal = self.balances.entry(key).or_insert_with(|| Balance {
             user: req.user.clone(),
-            asset: req.asset.clone(),
+            asset: req.asset,
             available: 0,
             locked: 0,
         });
@@ -685,27 +680,6 @@ impl MatchingEngine {
         })]
     }
 
-    fn credit_available(&mut self, user: &UserId, asset: &AssetId, amount: u64) {
-        let key = (user.clone(), asset.clone());
-        let bal = self.balances.entry(key).or_insert_with(|| Balance {
-            user: user.clone(),
-            asset: asset.clone(),
-            available: 0,
-            locked: 0,
-        });
-        bal.available += amount;
-    }
-
-    fn debit_available(&mut self, user: &UserId, asset: &AssetId, amount: u64) {
-        let key = (user.clone(), asset.clone());
-        let bal = self.balances.entry(key).or_insert_with(|| Balance {
-            user: user.clone(),
-            asset: asset.clone(),
-            available: 0,
-            locked: 0,
-        });
-        bal.available = bal.available.saturating_sub(amount);
-    }
 }
 
 impl MatchingEngine {
@@ -735,5 +709,22 @@ impl MatchingEngine {
 
     pub fn set_next_order_id(&mut self, id: OrderId) {
         self.next_order_id = id;
+    }
+
+    /// Process a batch of requests under a single mutable borrow (i.e., under
+    /// a single mutex acquisition at the caller level).
+    ///
+    /// Each request still gets its own internal [`DeltaBuffer`] so rollback
+    /// semantics remain correct for failed orders (e.g., FOK not filled).
+    /// The caller holds `&mut self` for the entire batch, which is the key
+    /// optimisation: mutex lock cost is amortised across all N orders instead
+    /// of paid N times.
+    ///
+    /// Returns one `Vec<Response>` per input request, in submission order.
+    pub fn process_batch(&mut self, requests: Vec<(Request, Timestamp)>) -> Vec<Vec<Response>> {
+        requests
+            .into_iter()
+            .map(|(req, ts)| self.process(req, ts))
+            .collect()
     }
 }

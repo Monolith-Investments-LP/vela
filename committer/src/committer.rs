@@ -158,7 +158,7 @@ impl Committer {
         for ((user, asset), balance) in &batch.balances {
             self.state_manager.observe_balance_change(user, asset, balance);
         }
-        for (_user, meta) in &batch.metadata {
+        for meta in batch.metadata.values() {
             self.state_manager.observe_metadata_change(meta);
         }
     }

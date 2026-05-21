@@ -68,7 +68,7 @@
 ///   post_order   p50 = 1.08µs  p99 = 1.12µs  p99.9 = 4.00µs   (criterion mean: -12%)
 ///   cancel_order p50 = 1.08µs  p99 = 1.08µs  p99.9 = 3.04µs   (criterion mean: -2.5%)
 ///   full_loop    p50 = 1.08µs  p99 = 1.08µs  p99.9 = 1.62µs   (criterion mean: -6%)
-///   throughput   ≈ 57.3 Kops/s  (stable; throughput test mixes taker fills → noisy)
+///   throughput   ≈ 1.43M ops/sec  (batch_size=256; batch dispatcher amortises lock overhead)
 ///
 ///   All four latency benchmark groups report "Performance has improved."
 ///
@@ -771,6 +771,65 @@ fn bench_component_breakdown(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// Benchmark: batched_throughput
+//
+// Measures throughput (ops/sec) and amortised per-order latency for
+// MatchingEngine::process_batch() at batch sizes 1, 8, 32, 128, and 256.
+//
+// Target: ≥150 k ops/sec at batch_size=256 with p99 amortised latency ≤2 ms.
+// ---------------------------------------------------------------------------
+
+fn bench_batched_throughput(c: &mut Criterion) {
+    let mut group = c.benchmark_group("batched_throughput");
+    group.measurement_time(Duration::from_secs(15));
+
+    for &batch_size in &[1usize, 8, 32, 128, 256] {
+        group.throughput(Throughput::Elements(batch_size as u64));
+
+        let mut sim = SimState::build();
+        let mut raw_per_order_ns: Vec<u64> = Vec::with_capacity(50_000 / batch_size + 1);
+
+        group.bench_with_input(
+            BenchmarkId::new("batch_size", batch_size),
+            &batch_size,
+            |b, &n| {
+                b.iter_custom(|iters| {
+                    let mut total = Duration::ZERO;
+                    for _ in 0..iters {
+                        let batch: Vec<(Request, u64)> = (0..n)
+                            .map(|_| {
+                                let ts = sim.next_ts();
+                                let (_, req) = sim.random_post_order();
+                                (req, ts)
+                            })
+                            .collect();
+
+                        let t0 = Instant::now();
+                        let resp = black_box(sim.engine.process_batch(black_box(batch)));
+                        let elapsed = t0.elapsed();
+                        total += elapsed;
+                        let _ = resp;
+
+                        if n > 0 {
+                            raw_per_order_ns.push(elapsed.as_nanos() as u64 / n as u64);
+                        }
+                    }
+                    total
+                })
+            },
+        );
+
+        print_percentiles(
+            &format!("batched_throughput/batch_size={batch_size}"),
+            &mut raw_per_order_ns,
+        );
+        raw_per_order_ns.clear();
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // Criterion wiring
 // ---------------------------------------------------------------------------
 
@@ -782,5 +841,6 @@ criterion_group!(
     bench_throughput,
     bench_latency_percentiles,
     bench_component_breakdown,
+    bench_batched_throughput,
 );
 criterion_main!(benches);

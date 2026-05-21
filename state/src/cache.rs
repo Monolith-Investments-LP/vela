@@ -28,13 +28,13 @@ impl StateCache {
     }
 
     pub fn set_balance(&mut self, balance: &Balance) {
-        let key = StateKey::Balance { user: balance.user.clone(), asset: balance.asset.clone() };
+        let key = StateKey::Balance { user: balance.user.clone(), asset: balance.asset };
         let val = serde_json::to_vec(balance).unwrap_or_default();
         self.raw_set(key, val);
     }
 
     pub fn get_balance(&self, user: &UserId, asset: &AssetId) -> Option<Balance> {
-        let key = StateKey::Balance { user: user.clone(), asset: asset.clone() };
+        let key = StateKey::Balance { user: user.clone(), asset: *asset };
         let raw = self.raw_get(&key)?;
         serde_json::from_slice(raw).ok()
     }

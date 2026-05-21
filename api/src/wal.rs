@@ -151,6 +151,7 @@ pub struct Wal {
     dir: PathBuf,
     inner: tokio::sync::Mutex<WalInner>,
     sequence: Arc<AtomicU64>,
+    #[allow(dead_code)]
     max_segment_size: u64,
 }
 

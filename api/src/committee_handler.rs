@@ -20,7 +20,8 @@ use sha2::Sha256;
 use tokio::sync::Mutex;
 use types::{DecryptionShare, EncryptedOrder, G1Affine, PostOrderRequest};
 
-use crate::{AppState, OrderChannelItem};
+use engine::batch_dispatcher::BatchedRequest;
+use crate::AppState;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -396,19 +397,22 @@ pub async fn post_committee_share(
                     .into_response();
             }
 
-            // Store the proof.
+            // Store the proof for API reporting endpoints.
             {
                 let mut proofs = state.decryption_proofs.lock().await;
-                proofs.push(proof);
+                proofs.push(proof.clone());
             }
 
             // Inject into the engine with the ORIGINAL submission timestamp.
+            // The decryption proof rides along so the batch dispatcher can
+            // include it in the single CommitBatch for this dispatch window.
             let req: PostOrderRequest = plain_order.0;
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            let channel_item = OrderChannelItem {
-                req,
+            let (responder, response_rx) = tokio::sync::oneshot::channel();
+            let channel_item = BatchedRequest {
+                request: types::Request::PostOrder(req),
                 ts: received_ts_ms,
-                response_tx,
+                responder,
+                decryption_proof: Some(proof),
             };
 
             if let Err(e) = state.order_tx.send(channel_item).await {

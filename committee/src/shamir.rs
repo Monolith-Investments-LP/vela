@@ -238,7 +238,7 @@ impl Fr {
         // Since 2^64 < MODULUS, Fr([0,1,0,0]) is a valid Fr element.
         let two64 = Fr([0, 1, 0, 0]);
         let hi_fr = two64.mul_small(hi_val);
-        hi_fr.add(lo)
+        hi_fr + lo
     }
 
     /// Little-endian bytes (32 bytes).
@@ -259,25 +259,6 @@ impl Fr {
         Fr(reduce_256(&limbs))
     }
 
-    pub fn add(self, other: Self) -> Self {
-        Fr(fr_add(&self.0, &other.0))
-    }
-
-    pub fn sub(self, other: Self) -> Self {
-        Fr(fr_sub(&self.0, &other.0))
-    }
-
-    pub fn neg(self) -> Self {
-        if self == Self::ZERO {
-            return Self::ZERO;
-        }
-        Fr(sub_raw(&MODULUS, &self.0))
-    }
-
-    pub fn mul(self, other: Self) -> Self {
-        Fr(fr_mul(&self.0, &other.0))
-    }
-
     /// Multiply by a small u64 via double-and-add (avoids full 256-bit multiplication).
     pub fn mul_small(self, k: u64) -> Self {
         let mut result = Fr::ZERO;
@@ -285,9 +266,9 @@ impl Fr {
         let mut k = k;
         while k > 0 {
             if k & 1 == 1 {
-                result = result.add(base);
+                result = result + base;
             }
-            base = base.add(base);
+            base = base + base;
             k >>= 1;
         }
         result
@@ -297,6 +278,28 @@ impl Fr {
     pub fn inv(self) -> Option<Self> {
         fr_inv_bgcd(&self.0).map(Fr)
     }
+}
+
+impl std::ops::Add for Fr {
+    type Output = Fr;
+    fn add(self, other: Fr) -> Fr { Fr(fr_add(&self.0, &other.0)) }
+}
+
+impl std::ops::Sub for Fr {
+    type Output = Fr;
+    fn sub(self, other: Fr) -> Fr { Fr(fr_sub(&self.0, &other.0)) }
+}
+
+impl std::ops::Neg for Fr {
+    type Output = Fr;
+    fn neg(self) -> Fr {
+        if self == Fr::ZERO { Fr::ZERO } else { Fr(sub_raw(&MODULUS, &self.0)) }
+    }
+}
+
+impl std::ops::Mul for Fr {
+    type Output = Fr;
+    fn mul(self, other: Fr) -> Fr { Fr(fr_mul(&self.0, &other.0)) }
 }
 
 // --------------------------------------------------------------------------
@@ -339,7 +342,7 @@ fn eval_poly_horner(coeffs: &[Fr], x: Fr) -> Fr {
     // f(x) = c0 + c1*x + c2*x^2 + ... = c0 + x*(c1 + x*(c2 + ...))
     let mut result = Fr::ZERO;
     for coeff in coeffs.iter().rev() {
-        result = result.mul(x).add(*coeff);
+        result = result * x + *coeff;
     }
     result
 }
@@ -386,8 +389,8 @@ pub fn lagrange_coefficient(j: u8, set: &[u8]) -> Result<Fr> {
     let den_fr = Fr::from_u128(den_abs);
     let den_inv = den_fr.inv().ok_or_else(|| anyhow::anyhow!("zero Lagrange denominator"))?;
 
-    let lambda = num_fr.mul(den_inv);
-    Ok(if den_neg { lambda.neg() } else { lambda })
+    let lambda = num_fr * den_inv;
+    Ok(if den_neg { -lambda } else { lambda })
 }
 
 #[cfg(test)]
@@ -398,28 +401,28 @@ mod tests {
     fn test_fr_add_sub_roundtrip() {
         let a = Fr::from_u64(42);
         let b = Fr::from_u64(100);
-        assert_eq!(a.add(b).sub(b), a);
+        assert_eq!(a + b - b, a);
     }
 
     #[test]
     fn test_fr_neg() {
         let a = Fr::from_u64(7);
-        let neg_a = a.neg();
-        assert_eq!(a.add(neg_a), Fr::ZERO);
+        let neg_a = -a;
+        assert_eq!(a + neg_a, Fr::ZERO);
     }
 
     #[test]
     fn test_fr_inv() {
         let a = Fr::from_u64(3);
         let inv = a.inv().expect("3 has inverse mod r");
-        assert_eq!(a.mul(inv), Fr::ONE);
+        assert_eq!(a * inv, Fr::ONE);
     }
 
     #[test]
     fn test_fr_mul() {
         let a = Fr::from_u64(6);
         let b = Fr::from_u64(7);
-        assert_eq!(a.mul(b), Fr::from_u64(42));
+        assert_eq!(a * b, Fr::from_u64(42));
     }
 
     #[test]
@@ -445,7 +448,7 @@ mod tests {
         let mut reconstructed = Fr::ZERO;
         for share in &subset {
             let lambda = lagrange_coefficient(share.index, &indices).unwrap();
-            reconstructed = reconstructed.add(lambda.mul(share.value));
+            reconstructed = reconstructed + lambda * share.value;
         }
         assert_eq!(reconstructed, secret);
     }
@@ -464,7 +467,7 @@ mod tests {
         let mut reconstructed = Fr::ZERO;
         for share in &subset {
             let lambda = lagrange_coefficient(share.index, &indices).unwrap();
-            reconstructed = reconstructed.add(lambda.mul(share.value));
+            reconstructed = reconstructed + lambda * share.value;
         }
         assert_eq!(reconstructed, secret);
     }

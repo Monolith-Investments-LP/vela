@@ -388,7 +388,7 @@ impl UserMetadata {
     }
 
     pub fn contains_order_id(&self, id: OrderId) -> bool {
-        self.open_order_ids.iter().any(|&s| s == id)
+        self.open_order_ids.contains(&id)
     }
 }
 
@@ -641,6 +641,23 @@ pub enum VelaError {
     InvalidClientOrderId,
     #[error("internal error: {0}")]
     Internal(String),
+}
+
+/// Aggregated result produced by one batch dispatch window.
+///
+/// Created by [`engine::BatchDispatcher`] after processing all requests in a
+/// batch. The `CommitBatch` in the committer layer should be constructed from
+/// this so one dispatch window → one DA commit entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchResult {
+    /// Flattened responses from all requests in the batch, in submission order.
+    pub responses: Vec<Response>,
+    /// Number of requests in this batch.
+    pub batch_size: usize,
+    /// Wall-clock time from window open (first arrival) to delta commit, in nanoseconds.
+    pub dispatch_latency_ns: u64,
+    /// Decryption proofs attached to TEOB (threshold-encrypted) orders in this batch.
+    pub decryption_proofs: Vec<DecryptionProof>,
 }
 
 impl From<VelaError> for ErrorResponse {

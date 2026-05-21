@@ -175,7 +175,7 @@ pub fn restore_engine_from_snapshot(
         for (asset_str, bal) in asset_balances {
             let asset = AssetId::from_str(&asset_str);
             engine.balances.insert(
-                (user.clone(), asset.clone()),
+                (user.clone(), asset),
                 Balance { user: user.clone(), asset, available: bal.available, locked: bal.locked },
             );
         }
@@ -254,12 +254,12 @@ pub fn replay_wal_entries(
                 wal::ORDER_POST => {
                     if let Ok(post) = entry.decode::<WalOrderPost>() {
                         let order_id = post.order_id;
-                        if !recovered_orders.contains_key(&order_id) {
+                        recovered_orders.entry(order_id).or_insert_with(|| {
                             let now = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_micros() as u64;
-                            recovered_orders.insert(order_id, StoredOrder {
+                            StoredOrder {
                                 id: order_id,
                                 market_id: post.market_id,
                                 user: post.user,
@@ -277,8 +277,8 @@ pub fn replay_wal_entries(
                                 updated_at: now,
                                 fills: vec![],
                                 da_hash: None,
-                            });
-                        }
+                            }
+                        });
                     }
                 }
                 wal::ORDER_PROCESSED => {
@@ -318,7 +318,7 @@ pub fn replay_wal_entries(
                             }
                             if let Some(order) = recovered_orders.get_mut(&fill.maker_order_id) {
                                 order.fills.push(OrderFillRecord {
-                                    fill_id: fill_id,
+                                    fill_id,
                                     counterparty_order_id: fill.taker_order_id,
                                     counterparty_address: fill.taker_address,
                                     price: fill.price,

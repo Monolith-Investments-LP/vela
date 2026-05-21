@@ -12,9 +12,12 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+rand = { workspace = true }
+tokio = { workspace = true }
 
 [[bench]]
 name = "matching_engine_bench"

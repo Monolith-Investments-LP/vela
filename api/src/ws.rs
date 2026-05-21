@@ -33,7 +33,8 @@ pub async fn run_background_task(state: Arc<AppState>) {
         markets_counter += 1;
         let ts = now_ms();
 
-        let book_data: Vec<(String, Vec<[String; 2]>, Vec<[String; 2]>)> = {
+        type BookEntry = (String, Vec<[String; 2]>, Vec<[String; 2]>);
+        let book_data: Vec<BookEntry> = {
             let engine = state.engine.lock().await;
             engine.markets.keys()
                 .filter_map(|market_id| {
@@ -62,7 +63,7 @@ pub async fn run_background_task(state: Arc<AppState>) {
             let _ = state.ws_tx.send(envelope);
         }
 
-        if markets_counter % 5 == 0 {
+        if markets_counter.is_multiple_of(5) {
             let summaries: Vec<serde_json::Value> = {
                 let engine = state.engine.lock().await;
                 engine.markets.values().map(|m| {
@@ -124,7 +125,7 @@ async fn handle_ws_inner(socket: WebSocket, state: Arc<AppState>) {
                                     &mut subscribed_channels,
                                 ).await;
                                 for json in responses {
-                                    if sender.send(Message::Text(json.into())).await.is_err() {
+                                    if sender.send(Message::Text(json)).await.is_err() {
                                         return;
                                     }
                                 }
@@ -135,7 +136,7 @@ async fn handle_ws_inner(socket: WebSocket, state: Arc<AppState>) {
                                     message: "could not parse message".to_string(),
                                 };
                                 let json = serde_json::to_string(&err).unwrap_or_default();
-                                let _ = sender.send(Message::Text(json.into())).await;
+                                let _ = sender.send(Message::Text(json)).await;
                             }
                         }
                     }
@@ -159,7 +160,7 @@ async fn handle_ws_inner(socket: WebSocket, state: Arc<AppState>) {
                 match msg {
                     Some(m) => {
                         let json = serde_json::to_string(&m).unwrap_or_default();
-                        if sender.send(Message::Text(json.into())).await.is_err() { return; }
+                        if sender.send(Message::Text(json)).await.is_err() { return; }
                     }
                     None => return,
                 }
@@ -180,7 +181,7 @@ async fn handle_ws_inner(socket: WebSocket, state: Arc<AppState>) {
                 match msg {
                     Some(m) => {
                         let json = serde_json::to_string(&m).unwrap_or_default();
-                        if sender.send(Message::Text(json.into())).await.is_err() { return; }
+                        if sender.send(Message::Text(json)).await.is_err() { return; }
                     }
                     None => return,
                 }
@@ -199,7 +200,7 @@ async fn handle_ws_inner(socket: WebSocket, state: Arc<AppState>) {
                     Some(envelope) => {
                         if subscribed_channels.contains(&envelope.channel) {
                             let json = serde_json::to_string(&envelope).unwrap_or_default();
-                            if sender.send(Message::Text(json.into())).await.is_err() { return; }
+                            if sender.send(Message::Text(json)).await.is_err() { return; }
                         }
                     }
                     None => return,
@@ -221,7 +222,7 @@ async fn handle_ws_inner(socket: WebSocket, state: Arc<AppState>) {
                 match msg {
                     Some(envelope) => {
                         let json = serde_json::to_string(&envelope).unwrap_or_default();
-                        if sender.send(Message::Text(json.into())).await.is_err() { return; }
+                        if sender.send(Message::Text(json)).await.is_err() { return; }
                     }
                     None => return,
                 }
@@ -434,7 +435,7 @@ async fn handle_timestamp_auth(
     subscribed_channels: &mut HashSet<String>,
 ) -> Vec<String> {
     let now = now_ms();
-    let diff = if now >= timestamp { now - timestamp } else { timestamp - now };
+    let diff = now.abs_diff(timestamp);
     if diff > 60_000 {
         let err = WsServerMessage::Error {
             code: "AUTH_EXPIRED".to_string(),

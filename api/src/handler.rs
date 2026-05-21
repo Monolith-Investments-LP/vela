@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use engine;
 use axum::{
     extract::{Path, Query, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, Method, StatusCode},
@@ -382,8 +383,13 @@ async fn post_order(
         }
     }
 
-    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-    let channel_item = crate::OrderChannelItem { req, ts, response_tx: resp_tx };
+    let (responder, resp_rx) = tokio::sync::oneshot::channel();
+    let channel_item = engine::batch_dispatcher::BatchedRequest {
+        request: EngineRequest::PostOrder(req),
+        ts,
+        responder,
+        decryption_proof: None,
+    };
     if state.order_tx.send(channel_item).await.is_err() {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
     }
@@ -2423,7 +2429,7 @@ async fn proofs_list_handler(
 
     let filtered: Vec<&zkvm::BatchProof> = all
         .into_iter()
-        .filter(|p| cursor.map_or(true, |c| p.batch_id < c))
+        .filter(|p| cursor.is_none_or(|c| p.batch_id < c))
         .take(limit)
         .collect();
 
@@ -2558,7 +2564,7 @@ async fn attestations_list_handler(
 
     let filtered: Vec<&tee::AttestationRecord> = all
         .into_iter()
-        .filter(|r| cursor.map_or(true, |c| r.batch_id < c))
+        .filter(|r| cursor.is_none_or(|c| r.batch_id < c))
         .take(limit)
         .collect();
 

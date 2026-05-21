@@ -45,9 +45,9 @@ impl MptStore {
         }
         let mut hasher = Keccak256::new();
         for (k, v) in &self.nodes {
-            hasher.update(&(k.len() as u32).to_be_bytes());
+            hasher.update((k.len() as u32).to_be_bytes());
             hasher.update(k);
-            hasher.update(&(v.len() as u32).to_be_bytes());
+            hasher.update((v.len() as u32).to_be_bytes());
             hasher.update(v);
         }
         let root: Hash = hasher.finalize().into();

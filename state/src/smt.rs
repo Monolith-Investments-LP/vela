@@ -57,14 +57,6 @@ fn node_hash(left: &Hash, right: &Hash) -> Hash {
     kh(&buf)
 }
 
-/// Hash for a single (key_hash, value_hash) pair.
-fn pair_hash(key_hash: &Hash, val_hash: &Hash) -> Hash {
-    let mut buf = [0u8; 64];
-    buf[..32].copy_from_slice(key_hash);
-    buf[32..].copy_from_slice(val_hash);
-    kh(&buf)
-}
-
 /// Hash for a leaf bucket (sorted list of pairs).  Empty bucket → [0u8; 32].
 fn bucket_hash(pairs: &BTreeMap<Hash, Hash>) -> Hash {
     if pairs.is_empty() {
@@ -175,14 +167,6 @@ impl Slot {
         removed
     }
 
-    fn get(&self, raw_key: &[u8]) -> Option<&[u8]> {
-        let _ = key_hash(raw_key); // compute but we need to look up differently
-        // We need raw_key → raw_val, but we store key_hash → val_hash.
-        // Return None since we can't reverse val_hash; the outer store holds raw values.
-        // (This method is only used in internal probe; raw values are in SmtStore.values.)
-        None
-    }
-
     fn hash(&self) -> Hash {
         bucket_hash(&self.pairs)
     }
@@ -191,9 +175,6 @@ impl Slot {
         self.pairs.is_empty()
     }
 
-    fn len(&self) -> usize {
-        self.pairs.len()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -353,9 +334,9 @@ impl SmtStore {
 
         let mut siblings = [[0u8; 32]; SMT_DEPTH];
         let mut current_path = path;
-        for d in 0..SMT_DEPTH {
+        for (d, sibling) in siblings.iter_mut().enumerate() {
             let sibling_path = current_path ^ 1;
-            siblings[d] = self
+            *sibling = self
                 .node_cache
                 .get(&(d, sibling_path))
                 .copied()

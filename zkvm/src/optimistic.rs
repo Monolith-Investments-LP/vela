@@ -82,7 +82,7 @@ impl OptimisticProver {
     /// immediately.
     ///
     /// * `root`     – MPT root claimed by the operator after executing `requests`
-    ///                against `snapshot`.
+    ///   against `snapshot`.
     /// * `sequence` – monotonically increasing batch index.
     /// * `snapshot` – pre-batch MPT snapshot (key-value pairs).
     /// * `requests` – ordered list of requests processed in this batch.

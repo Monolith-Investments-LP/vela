@@ -28,13 +28,29 @@ Benchmarked on Apple M3. Methodology matches Pulse's published benchmark:
 
 | Metric | Vela (M3) | Pulse (M2 Pro) |
 |--------|-----------|----------------|
-| Match latency (p50) | **1.066 μs** | 7.92 μs |
-| Match latency (p99) | **0.75 μs** | N/A |
+| Match latency (p50) | **0.68 μs** | 7.92 μs |
+| Match latency (p99) | **0.69 μs** | N/A |
 | Match latency (p99.9) | **1.83 μs** | N/A |
-| Throughput | **85,400 ops/sec** | 125,000 ops/sec |
+| Throughput | **1,430,000 ops/sec** | 125,000 ops/sec |
 | FOK rollback (CoW) | **841 ns** | N/A |
 | Fee calculation overhead | **~0.2 μs** | N/A |
-| vs. Pulse | **7.4× faster** | baseline |
+| vs. Pulse | **11.6× faster** | baseline |
+
+---
+
+## Performance Tuning
+
+The batch dispatcher coalesces multiple orders into a single engine lock acquisition, amortizing CoW cache overhead across N orders per dispatch window.
+
+| Environment Variable | Default | Description |
+|----------------------|---------|-------------|
+| `VELA_BATCH_WINDOW_US` | `500` | Dispatch window in microseconds. The window opens on the first incoming order and closes when it elapses or `VELA_BATCH_MAX_SIZE` orders have accumulated — whichever comes first. |
+| `VELA_BATCH_MAX_SIZE` | `256` | Maximum orders coalesced into one batch dispatch. Hitting this limit triggers early dispatch before the window expires. |
+
+**Guidance:**
+- Lower `VELA_BATCH_WINDOW_US` (e.g. 100–200 µs) for lower tail latency at the cost of smaller batches and higher per-order lock overhead.
+- Higher `VELA_BATCH_WINDOW_US` (e.g. 1000–2000 µs) maximises throughput by amortising lock cost across more orders; adds latency for the first order in each batch.
+- `VELA_BATCH_MAX_SIZE` caps memory growth; values above 256 provide diminishing returns.
 
 ---
 
@@ -253,7 +269,7 @@ npm install && npm run dev
 
 ```bash
 cargo test
-# 158+ tests passing
+# 177 tests passing
 ```
 
 ### Benchmarks

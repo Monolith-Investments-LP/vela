@@ -55,7 +55,7 @@ async fn run(socket: WebSocket, market_filter: Option<String>, state: Arc<AppSta
     // Step 1: send challenge immediately.
     let challenge = serde_json::json!({ "type": "challenge", "nonce": nonce });
     if sender
-        .send(Message::Text(serde_json::to_string(&challenge).unwrap_or_default().into()))
+        .send(Message::Text(serde_json::to_string(&challenge).unwrap_or_default()))
         .await
         .is_err()
     {
@@ -79,14 +79,14 @@ async fn run(socket: WebSocket, market_filter: Option<String>, state: Arc<AppSta
         Ok(v) => v,
         Err(_) => {
             let err = serde_json::json!({"type":"error","code":"INVALID_MESSAGE","message":"could not parse auth message"});
-            let _ = sender.send(Message::Text(serde_json::to_string(&err).unwrap_or_default().into())).await;
+            let _ = sender.send(Message::Text(serde_json::to_string(&err).unwrap_or_default())).await;
             return;
         }
     };
 
     if auth.get("type").and_then(|v| v.as_str()) != Some("auth") {
         let err = serde_json::json!({"type":"error","code":"AUTH_REQUIRED","message":"expected auth message"});
-        let _ = sender.send(Message::Text(serde_json::to_string(&err).unwrap_or_default().into())).await;
+        let _ = sender.send(Message::Text(serde_json::to_string(&err).unwrap_or_default())).await;
         return;
     }
 
@@ -94,7 +94,7 @@ async fn run(socket: WebSocket, market_filter: Option<String>, state: Arc<AppSta
         Some(a) => a.to_string(),
         None => {
             let err = serde_json::json!({"type":"error","code":"MISSING_FIELD","message":"missing address"});
-            let _ = sender.send(Message::Text(serde_json::to_string(&err).unwrap_or_default().into())).await;
+            let _ = sender.send(Message::Text(serde_json::to_string(&err).unwrap_or_default())).await;
             return;
         }
     };
@@ -103,7 +103,7 @@ async fn run(socket: WebSocket, market_filter: Option<String>, state: Arc<AppSta
         Some(s) => s.to_string(),
         None => {
             let err = serde_json::json!({"type":"error","code":"MISSING_FIELD","message":"missing signature"});
-            let _ = sender.send(Message::Text(serde_json::to_string(&err).unwrap_or_default().into())).await;
+            let _ = sender.send(Message::Text(serde_json::to_string(&err).unwrap_or_default())).await;
             return;
         }
     };
@@ -112,28 +112,28 @@ async fn run(socket: WebSocket, market_filter: Option<String>, state: Arc<AppSta
         Some(n) => n.to_string(),
         None => {
             let err = serde_json::json!({"type":"error","code":"MISSING_FIELD","message":"missing nonce"});
-            let _ = sender.send(Message::Text(serde_json::to_string(&err).unwrap_or_default().into())).await;
+            let _ = sender.send(Message::Text(serde_json::to_string(&err).unwrap_or_default())).await;
             return;
         }
     };
 
     if client_nonce != nonce {
         let err = serde_json::json!({"type":"error","code":"INVALID_NONCE","message":"nonce does not match server challenge"});
-        let _ = sender.send(Message::Text(serde_json::to_string(&err).unwrap_or_default().into())).await;
+        let _ = sender.send(Message::Text(serde_json::to_string(&err).unwrap_or_default())).await;
         return;
     }
 
     let message = auth_signing_message(&nonce);
     if verify_matches_async(message, signature, address.clone()).await.is_err() {
         let err = serde_json::json!({"type":"error","code":"AUTH_FAILED","message":"invalid signature"});
-        let _ = sender.send(Message::Text(serde_json::to_string(&err).unwrap_or_default().into())).await;
+        let _ = sender.send(Message::Text(serde_json::to_string(&err).unwrap_or_default())).await;
         return;
     }
 
     // Auth succeeded.
     let authed = serde_json::json!({ "type": "authenticated", "address": address });
     if sender
-        .send(Message::Text(serde_json::to_string(&authed).unwrap_or_default().into()))
+        .send(Message::Text(serde_json::to_string(&authed).unwrap_or_default()))
         .await
         .is_err()
     {
@@ -166,7 +166,7 @@ async fn run(socket: WebSocket, market_filter: Option<String>, state: Arc<AppSta
                             }
                         }
                         let json = serde_json::to_string(&evt).unwrap_or_default();
-                        if sender.send(Message::Text(json.into())).await.is_err() {
+                        if sender.send(Message::Text(json)).await.is_err() {
                             return;
                         }
                     }
