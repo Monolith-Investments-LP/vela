@@ -14,13 +14,20 @@ const PARCHMENT = '#E8E4D8'
 
 const THROUGHPUT_TS = [179,224,223,218,223,215,212,217,213,220,207,202,223,218,214,217,219,204,186,213,216,212,219,207,131,132,138,131,133,135,133,129,127,110,133,133,134,135,135,127,130,126,133,113,125,131,129,127,121,132,135,134,134,135,112,133,134,134,127,132]
 
-const HL_ROWS = [
-  { metric: 'Engine throughput ceiling', vela: '2,500,000 ops/sec', hl: '200,000 ops/sec¹', note: 'In-process order matching, no I/O' },
-  { metric: 'Consensus throughput ceiling', vela: 'N/A (no consensus layer)', hl: '>1,000,000 ops/sec¹', note: 'HyperBFT theoretical maximum' },
-  { metric: 'End-to-end p50 (1 client)', vela: '16.9 ms (loopback)²', hl: '200 ms (colocated)¹', note: 'Full round-trip incl. auth, dispatch, matching' },
-  { metric: 'End-to-end p99 (1 client)', vela: '19.9 ms (loopback)²', hl: '900 ms (colocated)¹', note: 'Full round-trip incl. auth, dispatch, matching' },
-  { metric: 'End-to-end p50 (32 concurrent)', vela: '159 ms (loopback)²', hl: 'Not published', note: '—' },
-  { metric: 'Sustained throughput (5 MM agents)', vela: '134 ops/sec mean · 156 ops/sec peak', hl: 'Not published', note: 'Live multi-agent workload over 300 s' },
+// Table 1: engine-layer isolation — Vela (M3) vs Pulse (M2 Pro)
+// Both measured in isolation, same methodology, no consensus/networking on hot path.
+const ENGINE_LAYER_ROWS = [
+  { engine: 'Vela', hw: 'Apple M3', throughput: '2,500,000 ops/sec', methodology: 'Criterion.rs, release build' },
+  { engine: 'Pulse', hw: 'Apple M2 Pro', throughput: '125,000 ops/sec¹', methodology: 'Published isolation benchmark' },
+]
+
+// Table 2: system-level reference — Hyperliquid published figures only.
+// Includes HyperBFT consensus + real networking. Not directly comparable to Table 1.
+const SYSTEM_REF_ROWS = [
+  { metric: 'Execution layer ceiling', value: '200,000 ops/sec', includes: 'Custom HyperCore binary + HyperBFT' },
+  { metric: 'Consensus throughput (theoretical)', value: '>1,000,000 ops/sec', includes: 'HyperBFT documented upper bound' },
+  { metric: 'End-to-end p50 (colocated)', value: '200 ms', includes: 'Full round-trip incl. 2-of-3 BFT validator round-trips' },
+  { metric: 'End-to-end p99 (colocated)', value: '900 ms', includes: 'Full round-trip incl. BFT consensus' },
 ]
 
 const TIER2_ROWS = [
@@ -29,7 +36,7 @@ const TIER2_ROWS = [
   { id: 'S3', sub: 'Burst-1000', p50: '3,871 ms', p99: '5,444 ms', p999: '—', p9999: '—', tput: '181 ops/sec' },
 ]
 
-const DISCLAIMER = 'Vela engine benchmarks measure the isolated matching layer only (no network transit, no BFT consensus). Hyperliquid\'s published figures include HyperBFT consensus and network overhead for colocated clients. Vela does not currently have a consensus layer. End-to-end figures are in-process loopback measurements. Hyperliquid\'s 200k ops/sec ceiling is self-reported and execution-bottlenecked per their own documentation. All comparisons should be interpreted as execution-layer vs. execution-layer, not full-system vs. full-system.'
+const SCOPE_NOTE = 'These benchmarks prove the matching algorithm is fast in isolation. They do not include BFT consensus, real TCP networking, signature verification on the hot path, deep book state, large MPT state, or sustained load beyond 5 minutes. The system-level benchmark suite will be published separately once a consensus layer exists. The Pulse comparison (Table 1) is methodology-equivalent and the most credible cross-engine figure here. The Hyperliquid figures (Table 2) are system-level and not directly comparable to any figure in this report.'
 
 // ── Shared primitives ──────────────────────────────────────────────────────────
 
@@ -77,10 +84,10 @@ const TICK = 'rgba(12,12,12,0.35)'
 // ── Tier 1: Throughput bar chart ───────────────────────────────────────────────
 
 function ThroughputBarChart() {
+  // Engine-layer isolation only — Hyperliquid is a system-level figure and lives in Table 2 below.
   const bars = [
-    { label: 'Vela', value: 2_500_000, display: '2.5M', fill: CRIMSON },
-    { label: 'Hyperliquid', value: 200_000, display: '200k', fill: 'rgba(12,12,12,0.18)' },
-    { label: 'Pulse', value: 125_000, display: '125k', fill: 'rgba(12,12,12,0.1)' },
+    { label: 'Vela (M3)', value: 2_500_000, display: '2.5M', fill: CRIMSON },
+    { label: 'Pulse (M2 Pro)', value: 125_000, display: '125k', fill: 'rgba(12,12,12,0.18)' },
   ]
   const W = 360, H = 220
   const pad = { t: 36, r: 16, b: 42, l: 40 }
@@ -209,21 +216,23 @@ function ComponentBreakdownChart() {
 // ── Tier 2: E2E grouped bar chart ──────────────────────────────────────────────
 
 function E2EBarChart() {
+  // Vela scenarios only. Hyperliquid is a system-level figure (consensus + real network)
+  // and is shown separately in Table 2 below — not alongside these loopback numbers.
   const groups = [
-    { label: 'Vela S1', sub: 'single-threaded', p50: 16.9, p99: 19.9, isVela: true },
-    { label: 'Vela S2', sub: 'concurrent-32', p50: 159, p99: 307, isVela: true },
-    { label: 'Hyperliquid', sub: 'published', p50: 200, p99: 900, isVela: false },
+    { label: 'Vela S1', sub: 'single-threaded', p50: 16.9, p99: 19.9 },
+    { label: 'Vela S2', sub: 'concurrent-32', p50: 159, p99: 307 },
+    { label: 'Vela S3', sub: 'burst-1000', p50: 3_871, p99: 5_444 },
   ]
   const W = 720, H = 300
   const pad = { t: 36, r: 20, b: 56, l: 56 }
   const iW = W - pad.l - pad.r
   const iH = H - pad.t - pad.b
-  const max = 1000
+  const max = 6000
   const groupW = iW / groups.length
   const bW = groupW * 0.27
   const bGap = groupW * 0.05
 
-  const yTicks = [0, 200, 400, 600, 800, 1000]
+  const yTicks = [0, 1000, 2000, 3000, 4000, 5000, 6000]
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} width="100%">
@@ -245,18 +254,14 @@ function E2EBarChart() {
         const p99x = cx + bGap / 2
         const p50y = pad.t + iH - p50H
         const p99y = pad.t + iH - p99H
-        const col = g.isVela ? CRIMSON : 'rgba(12,12,12,0.22)'
-        const col2 = g.isVela ? 'rgba(204,51,51,0.5)' : 'rgba(12,12,12,0.12)'
-        const lc = g.isVela ? CRIMSON : 'rgba(12,12,12,0.35)'
-        const lc2 = g.isVela ? 'rgba(204,51,51,0.75)' : 'rgba(12,12,12,0.25)'
         return (
           <g key={g.label}>
-            <rect x={p50x} y={p50y} width={bW} height={p50H} fill={col} />
-            <rect x={p99x} y={p99y} width={bW} height={p99H} fill={col2} />
+            <rect x={p50x} y={p50y} width={bW} height={p50H} fill={CRIMSON} />
+            <rect x={p99x} y={p99y} width={bW} height={p99H} fill="rgba(204,51,51,0.5)" />
             <text x={p50x + bW / 2} y={p50y - 5} textAnchor="middle"
-              fontSize="8.5" fill={lc} fontFamily={CN}>{g.p50}ms</text>
+              fontSize="8.5" fill={CRIMSON} fontFamily={CN}>{g.p50}ms</text>
             <text x={p99x + bW / 2} y={p99y - 5} textAnchor="middle"
-              fontSize="8.5" fill={lc2} fontFamily={CN}>{g.p99}ms</text>
+              fontSize="8.5" fill="rgba(204,51,51,0.75)" fontFamily={CN}>{g.p99}ms</text>
             <text x={cx} y={H - pad.b + 14} textAnchor="middle"
               fontSize="9.5" fontWeight="500" fill="rgba(12,12,12,0.6)" fontFamily={IN}>{g.label}</text>
             <text x={cx} y={H - pad.b + 26} textAnchor="middle"
@@ -270,7 +275,6 @@ function E2EBarChart() {
       <text x={pad.l + 14} y={19} fontSize="9" fill="rgba(12,12,12,0.55)" fontFamily={IN}>p50</text>
       <rect x={pad.l + 52} y={10} width={10} height={10} fill="rgba(204,51,51,0.5)" />
       <text x={pad.l + 66} y={19} fontSize="9" fill="rgba(12,12,12,0.55)" fontFamily={IN}>p99</text>
-      <text x={pad.l + 120} y={19} fontSize="9" fill="rgba(12,12,12,0.3)" fontFamily={IN}>(Hyperliquid shown in gray)</text>
     </svg>
   )
 }
@@ -422,7 +426,7 @@ export default function BenchmarksPage() {
       <section className="px-6 pb-14 lg:px-[52px]">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-[1px]" style={{ background: PARCHMENT }}>
           <StatCard label="Engine p50" value="0.38 µs" sublabel="Tier 1 isolated matching" />
-          <StatCard label="Throughput" value="2.5M ops/sec" sublabel="vs 200k HL ceiling" />
+          <StatCard label="Throughput" value="2.5M ops/sec" sublabel="Engine isolation (see Table 1)" />
           <StatCard label="E2E p50" value="16.9 ms" sublabel="Single client, loopback" />
           <StatCard label="Tests" value="180 / 1800" sublabel="failures" />
         </div>
@@ -432,7 +436,7 @@ export default function BenchmarksPage() {
       <section className="px-6 pb-16 lg:px-[52px]">
         <SectionLabel text="Tier 1 — Engine Microbenchmark · Pure in-process matching loop" />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-[1px] mb-[1px]" style={{ background: PARCHMENT }}>
-          <ChartBox title="Throughput vs. peers — ops/sec">
+          <ChartBox title="Engine-layer throughput — ops/sec (isolation benchmark, see Table 1)">
             <ThroughputBarChart />
           </ChartBox>
           <ChartBox title="Latency breakdown — µs per operation">
@@ -448,7 +452,7 @@ export default function BenchmarksPage() {
       <section className="px-6 pb-16 lg:px-[52px]">
         <SectionLabel text="Tier 2 — End-to-End HTTP Latency · Full request lifecycle, 127.0.0.1 loopback" />
         <div className="grid gap-[1px]" style={{ background: PARCHMENT }}>
-          <ChartBox title="Latency comparison — p50 and p99 (ms)  ·  Hyperliquid shown in gray">
+          <ChartBox title="End-to-end latency — p50 and p99 (ms) · Vela loopback scenarios only · See Table 2 for Hyperliquid system figures">
             <E2EBarChart />
           </ChartBox>
           {/* Metrics table */}
@@ -533,72 +537,79 @@ export default function BenchmarksPage() {
         </div>
       </section>
 
-      {/* ── Hyperliquid comparison ─────────────────────────────────────────── */}
-      <section className="px-6 pb-16 lg:px-[52px]">
-        <SectionLabel text="Comparison with Hyperliquid · Execution layer only" />
+      {/* ── Table 1: Engine-layer isolation ───────────────────────────────── */}
+      <section className="px-6 pb-10 lg:px-[52px]">
+        <SectionLabel text="Table 1 — Engine-layer isolation · Both measured in isolation, no consensus, no networking, no signature verification on hot path" />
         <div style={{ background: '#ffffff', overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '640px' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '480px' }}>
             <thead>
               <tr>
-                {[
-                  { label: 'Metric', crimson: false },
-                  { label: 'Vela', crimson: true },
-                  { label: 'Hyperliquid (published)', crimson: false },
-                  { label: 'What it measures', crimson: false },
-                ].map(({ label, crimson }) => (
-                  <th key={label} style={{
-                    fontFamily: IN,
-                    fontSize: '8px',
-                    textTransform: 'uppercase' as const,
-                    letterSpacing: '0.18em',
-                    padding: '16px 20px',
-                    textAlign: 'left' as const,
-                    borderBottom: '1px solid rgba(12,12,12,0.08)',
-                    borderLeft: crimson ? `3px solid ${CRIMSON}` : undefined,
-                    color: crimson ? CRIMSON : 'rgba(12,12,12,0.3)',
-                    whiteSpace: 'nowrap' as const,
-                    background: '#ffffff',
-                  }}>
-                    {label}
+                {['Engine', 'Hardware', 'Throughput ceiling', 'Methodology'].map((h) => (
+                  <th key={h} style={{ fontFamily: IN, fontSize: '8px', textTransform: 'uppercase' as const, letterSpacing: '0.18em', padding: '16px 20px', textAlign: 'left' as const, borderBottom: '1px solid rgba(12,12,12,0.08)', color: 'rgba(12,12,12,0.3)', whiteSpace: 'nowrap' as const, background: '#ffffff' }}>
+                    {h}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {HL_ROWS.map((row, i) => (
-                <tr key={row.metric} style={{ borderBottom: i < HL_ROWS.length - 1 ? '1px solid rgba(12,12,12,0.04)' : 'none' }}>
-                  <td style={{ fontFamily: IN, fontSize: '12px', color: 'rgba(12,12,12,0.55)', padding: '14px 20px', lineHeight: 1.5 }}>
-                    {row.metric}
-                  </td>
-                  <td style={{ fontFamily: CN, fontSize: '11.5px', color: INK, padding: '14px 20px', borderLeft: `3px solid ${CRIMSON}`, whiteSpace: 'nowrap' as const }}>
-                    {row.vela}
-                  </td>
-                  <td style={{ fontFamily: CN, fontSize: '11.5px', color: 'rgba(12,12,12,0.32)', padding: '14px 20px', whiteSpace: 'nowrap' as const }}>
-                    {row.hl}
-                  </td>
-                  <td style={{ fontFamily: IN, fontSize: '11.5px', color: 'rgba(12,12,12,0.4)', padding: '14px 20px', lineHeight: 1.5 }}>
-                    {row.note}
-                  </td>
+              {ENGINE_LAYER_ROWS.map((row, i) => (
+                <tr key={row.engine} style={{ borderBottom: i < ENGINE_LAYER_ROWS.length - 1 ? '1px solid rgba(12,12,12,0.04)' : 'none' }}>
+                  <td style={{ fontFamily: IN, fontWeight: 600, fontSize: '12px', color: i === 0 ? CRIMSON : INK, padding: '14px 20px', borderLeft: i === 0 ? `3px solid ${CRIMSON}` : '3px solid transparent' }}>{row.engine}</td>
+                  <td style={{ fontFamily: IN, fontSize: '11.5px', color: 'rgba(12,12,12,0.55)', padding: '14px 20px' }}>{row.hw}</td>
+                  <td style={{ fontFamily: CN, fontSize: '11.5px', color: i === 0 ? CRIMSON : 'rgba(12,12,12,0.45)', padding: '14px 20px', whiteSpace: 'nowrap' as const }}>{row.throughput}</td>
+                  <td style={{ fontFamily: IN, fontSize: '11px', color: 'rgba(12,12,12,0.4)', padding: '14px 20px' }}>{row.methodology}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <div style={{ padding: '12px 20px', borderTop: '1px solid rgba(12,12,12,0.04)' }}>
+          <div style={{ padding: '10px 20px', borderTop: '1px solid rgba(12,12,12,0.04)' }}>
             <p style={{ fontFamily: IN, fontSize: '9.5px', color: 'rgba(12,12,12,0.3)', margin: 0, lineHeight: 1.6 }}>
-              ¹ Hyperliquid figures from official Hyperliquid documentation. ² Measured over 127.0.0.1 loopback — no real network hop.
+              M3 vs M2 Pro is the only hardware confound. ¹ Pulse published figure, not independently verified.
             </p>
           </div>
         </div>
       </section>
 
-      {/* ── Disclaimer ────────────────────────────────────────────────────── */}
+      {/* ── Table 2: System-level reference ───────────────────────────────── */}
+      <section className="px-6 pb-16 lg:px-[52px]">
+        <SectionLabel text="Table 2 — System-level reference · Hyperliquid published figures · Includes HyperBFT consensus and real networking · Not directly comparable to Table 1" />
+        <div style={{ background: '#ffffff', overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '480px' }}>
+            <thead>
+              <tr>
+                {['Metric', 'Hyperliquid (published)', 'Includes'].map((h) => (
+                  <th key={h} style={{ fontFamily: IN, fontSize: '8px', textTransform: 'uppercase' as const, letterSpacing: '0.18em', padding: '16px 20px', textAlign: 'left' as const, borderBottom: '1px solid rgba(12,12,12,0.08)', color: 'rgba(12,12,12,0.3)', whiteSpace: 'nowrap' as const, background: '#ffffff' }}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {SYSTEM_REF_ROWS.map((row, i) => (
+                <tr key={row.metric} style={{ borderBottom: i < SYSTEM_REF_ROWS.length - 1 ? '1px solid rgba(12,12,12,0.04)' : 'none' }}>
+                  <td style={{ fontFamily: IN, fontSize: '12px', color: 'rgba(12,12,12,0.55)', padding: '14px 20px', lineHeight: 1.5 }}>{row.metric}</td>
+                  <td style={{ fontFamily: CN, fontSize: '11.5px', color: 'rgba(12,12,12,0.45)', padding: '14px 20px', whiteSpace: 'nowrap' as const }}>{row.value}</td>
+                  <td style={{ fontFamily: IN, fontSize: '11px', color: 'rgba(12,12,12,0.4)', padding: '14px 20px', lineHeight: 1.5 }}>{row.includes}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ padding: '10px 20px', borderTop: '1px solid rgba(12,12,12,0.04)' }}>
+            <p style={{ fontFamily: IN, fontSize: '9.5px', color: 'rgba(12,12,12,0.3)', margin: 0, lineHeight: 1.6 }}>
+              Hyperliquid figures from official Hyperliquid documentation. Vela has no comparable system-level figure yet — these will be published once a consensus layer and real-networking benchmark exist.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Scope and limitations ──────────────────────────────────────────── */}
       <section className="px-6 pb-20 lg:px-[52px]">
         <div style={{ borderTop: '1px solid rgba(12,12,12,0.08)', paddingTop: '24px' }}>
           <div style={{ fontFamily: IN, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.2em', color: 'rgba(12,12,12,0.25)', marginBottom: '10px' }}>
-            Disclaimer
+            Scope and limitations
           </div>
           <p style={{ fontFamily: IN, fontSize: '11px', color: 'rgba(12,12,12,0.38)', lineHeight: 1.8, maxWidth: '760px', margin: 0 }}>
-            {DISCLAIMER}
+            {SCOPE_NOTE}
           </p>
         </div>
       </section>

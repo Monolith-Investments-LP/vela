@@ -53,12 +53,8 @@ impl MarketShards {
     ) -> BatchResult {
         let batch_size = pending.len();
 
-        let pending_items: Vec<(
-            Request,
-            Timestamp,
-            tokio::sync::oneshot::Sender<Vec<Response>>,
-            Option<types::DecryptionProof>,
-        )> = pending
+        type PendingItem = (Request, Timestamp, tokio::sync::oneshot::Sender<Vec<Response>>, Option<types::DecryptionProof>);
+        let pending_items: Vec<PendingItem> = pending
             .into_iter()
             .map(|b| (b.request, b.ts, b.responder, b.decryption_proof))
             .collect();

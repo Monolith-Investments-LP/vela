@@ -1,3 +1,4 @@
+#![allow(clippy::doc_lazy_continuation)]
 /// Vela matching-engine benchmark suite
 ///
 /// Simulates realistic market-making dynamics:
@@ -88,7 +89,7 @@
 ///      and avoid allocator pressure.
 ///   5. p99.9 tail (~4µs post_order) — caused by HashMap rehash / OS
 ///      preemption; mitigate by pre-sizing maps at startup.
-/// ============================================================================
+// ============================================================================
 use std::time::{Duration, Instant};
 
 use criterion::{
@@ -265,7 +266,7 @@ impl SimState {
         let half = ORDERS_PER_MM / 2;
         for mm in 0..NUM_MMS as u8 {
             let u = user(mm);
-            for mkt_i in 0..NUM_MARKETS {
+            for (mkt_i, resting_mkt) in resting.iter_mut().enumerate() {
                 for side_pass in 0..2usize {
                     let side = if side_pass == 0 { OrderSide::Bid } else { OrderSide::Ask };
                     for _ in 0..half {
@@ -298,7 +299,7 @@ impl SimState {
                         for r in &responses {
                             if let Response::OrderPosted(op) = r {
                                 if matches!(op.status, OrderStatus::Open | OrderStatus::PartiallyFilled) {
-                                    resting[mkt_i].push((mm, op.order_id, side));
+                                    resting_mkt.push((mm, op.order_id, side));
                                 }
                             }
                         }
@@ -646,14 +647,14 @@ fn bench_latency_percentiles(c: &mut Criterion) {
     group.finish();
 }
 
-fn print_percentiles(label: &str, timings: &mut Vec<u64>) {
+fn print_percentiles(label: &str, timings: &mut [u64]) {
     if timings.is_empty() {
         return;
     }
     timings.sort_unstable();
     let p50  = percentile(timings, 50);
     let p99  = percentile(timings, 99);
-    let p999 = percentile(timings, 99_9); // tenths-of-percent index trick below
+    let p999 = percentile(timings, 999); // 999 tenths-of-percent = p99.9
     println!(
         "\n[latency] {label}: p50 = {:.2}µs  p99 = {:.2}µs  p99.9 = {:.2}µs  (n={})",
         p50  as f64 / 1_000.0,
@@ -661,6 +662,7 @@ fn print_percentiles(label: &str, timings: &mut Vec<u64>) {
         p999 as f64 / 1_000.0,
         timings.len(),
     );
+    print_hdr_histogram(label, timings);
 }
 
 /// `pct` is in tenths-of-a-percent (500 = p50, 990 = p99, 999 = p99.9).
@@ -830,6 +832,445 @@ fn bench_batched_throughput(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// HDR histogram helper
+//
+// Prints a compact 10-bucket text histogram showing the full distribution
+// shape.  `sorted_ns` must already be sorted ascending (nanoseconds).
+// ---------------------------------------------------------------------------
+
+fn print_hdr_histogram(label: &str, sorted_ns: &[u64]) {
+    if sorted_ns.is_empty() {
+        return;
+    }
+    let min = sorted_ns[0];
+    let max = *sorted_ns.last().unwrap();
+    if min == max {
+        println!(
+            "[hdr] {label}: (degenerate — all {} samples = {:.3}µs)",
+            sorted_ns.len(),
+            min as f64 / 1_000.0
+        );
+        return;
+    }
+    const BUCKETS: usize = 10;
+    const BAR_W: usize = 28;
+    let range = max - min;
+    let bucket_width = range.div_ceil(BUCKETS as u64);
+    let mut counts = [0usize; BUCKETS];
+    for &v in sorted_ns {
+        let b = ((v - min) / bucket_width) as usize;
+        counts[b.min(BUCKETS - 1)] += 1;
+    }
+    let max_count = counts.iter().copied().max().unwrap_or(1).max(1);
+    println!("[hdr] {label}:");
+    for (i, &count) in counts.iter().enumerate() {
+        let lo_ns = min + i as u64 * bucket_width;
+        let bar_len = if count == 0 { 0 } else { (count * BAR_W / max_count).max(1) };
+        println!(
+            "  {:>9.3}µs │{:<28}│ {:>7}",
+            lo_ns as f64 / 1_000.0,
+            "█".repeat(bar_len),
+            count,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark: fill_ratio_sweep
+//
+// Runs the standard MM workload at four cancel/fill ratios.  The 50/50
+// workload stresses CoW buffer, balance settlement, and credit system on
+// every other order.  Reports p50/p99/p99.9 + HDR histogram per ratio.
+// ---------------------------------------------------------------------------
+
+fn bench_fill_ratio_sweep(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fill_ratio_sweep");
+    group.measurement_time(Duration::from_secs(15));
+    group.sample_size(500);
+
+    for &cancel_pct in &[98u8, 90, 80, 50] {
+        let fill_pct = 100 - cancel_pct;
+        let id_label = format!("cancel{cancel_pct}_fill{fill_pct}");
+        let mut sim = SimState::build();
+        let mut timings: Vec<u64> = Vec::with_capacity(50_000);
+
+        group.bench_with_input(
+            BenchmarkId::new("cancel_fill_ratio", &id_label),
+            &cancel_pct,
+            |b, &cp| {
+                b.iter_custom(|iters| {
+                    let mut total = Duration::ZERO;
+                    for _ in 0..iters {
+                        let ts = sim.next_ts();
+                        let roll: u8 = sim.rng.gen_range(0..100);
+                        let t0 = Instant::now();
+                        if roll < cp {
+                            // cancel path (± repost if book is empty)
+                            if let Some((_, _, req)) = sim.random_cancel() {
+                                black_box(sim.engine.process(black_box(req), ts));
+                            } else {
+                                let (_, req) = sim.random_post_order();
+                                black_box(sim.engine.process(black_box(req), ts));
+                            }
+                        } else {
+                            // fill path: taker IOC + immediate repost to maintain book depth
+                            let taker_req = sim.taker_ioc();
+                            black_box(sim.engine.process(black_box(taker_req), ts));
+                            let ts2 = sim.next_ts();
+                            let (_, post_req) = sim.random_post_order();
+                            let post_resp = sim.engine.process(black_box(post_req), ts2);
+                            for r in &post_resp {
+                                if let Response::OrderPosted(op) = r {
+                                    if matches!(op.status, OrderStatus::Open | OrderStatus::PartiallyFilled) {
+                                        let mkt_i = sim.rng.gen_range(0..NUM_MARKETS);
+                                        sim.resting[mkt_i].push((0, op.order_id, OrderSide::Bid));
+                                    }
+                                }
+                            }
+                        }
+                        let elapsed = t0.elapsed();
+                        total += elapsed;
+                        timings.push(elapsed.as_nanos() as u64);
+                    }
+                    total
+                })
+            },
+        );
+
+        print_percentiles(&id_label, &mut timings);
+        timings.clear();
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark: concurrent_takers
+//
+// Varies the number of simultaneous aggressive taker IOC orders: 1, 4, 8, 16.
+// In this single-threaded microbench, "concurrent" means N takers execute
+// sequentially within one iteration, all competing for the same resting
+// liquidity.  Reports amortised per-taker p50/p99 at each concurrency level.
+// ---------------------------------------------------------------------------
+
+fn bench_concurrent_takers(c: &mut Criterion) {
+    let mut group = c.benchmark_group("concurrent_takers");
+    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(200);
+
+    for &n_takers in &[1usize, 4, 8, 16] {
+        group.throughput(Throughput::Elements(n_takers as u64));
+        let mut sim = SimState::build();
+        let mut timings: Vec<u64> = Vec::with_capacity(20_000);
+
+        group.bench_with_input(
+            BenchmarkId::new("n_takers", n_takers),
+            &n_takers,
+            |b, &n| {
+                b.iter_custom(|iters| {
+                    let mut total = Duration::ZERO;
+                    for _ in 0..iters {
+                        let t0 = Instant::now();
+                        for _ in 0..n {
+                            let ts = sim.next_ts();
+                            let req = sim.taker_ioc();
+                            black_box(sim.engine.process(black_box(req), ts));
+                        }
+                        let elapsed = t0.elapsed();
+                        total += elapsed;
+                        // Record amortised per-taker latency for percentile output.
+                        timings.push(elapsed.as_nanos() as u64 / n.max(1) as u64);
+                    }
+                    total
+                })
+            },
+        );
+
+        let label = format!("concurrent_takers/n={n_takers}");
+        print_percentiles(&label, &mut timings);
+        timings.clear();
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark: burst_profile
+//
+// Simulates a price-move event: 50 MMs cancel and requote simultaneously.
+// Measures p99/p99.9 during the burst window and a recovery probe (one
+// cancel immediately after the burst) to check whether latency returns to
+// baseline after the burst.
+// ---------------------------------------------------------------------------
+
+fn bench_burst_profile(c: &mut Criterion) {
+    const BURST_SIZE: usize = 50;
+
+    let mut group = c.benchmark_group("burst_profile");
+    group.measurement_time(Duration::from_secs(15));
+    group.sample_size(100);
+    group.throughput(Throughput::Elements(BURST_SIZE as u64 * 2));
+
+    let mut sim = SimState::build();
+    let mut burst_op_ns: Vec<u64> = Vec::with_capacity(100_000);
+    let mut recovery_ns: Vec<u64> = Vec::with_capacity(2_000);
+
+    group.bench_function("burst_50mm_cancel_repost", |b| {
+        b.iter_custom(|iters| {
+            let mut total = Duration::ZERO;
+            for _ in 0..iters {
+                // Burst window: 50 cancel+repost pairs
+                let burst_t0 = Instant::now();
+                for _ in 0..BURST_SIZE {
+                    let ts = sim.next_ts();
+                    if let Some((_, _, cancel_req)) = sim.random_cancel() {
+                        let op_t0 = Instant::now();
+                        black_box(sim.engine.process(black_box(cancel_req), ts));
+                        burst_op_ns.push(op_t0.elapsed().as_nanos() as u64);
+                    }
+                    let ts2 = sim.next_ts();
+                    let (_, post_req) = sim.random_post_order();
+                    let op_t0 = Instant::now();
+                    let post_resp = sim.engine.process(black_box(post_req), ts2);
+                    burst_op_ns.push(op_t0.elapsed().as_nanos() as u64);
+                    for r in &post_resp {
+                        if let Response::OrderPosted(op) = r {
+                            if matches!(op.status, OrderStatus::Open | OrderStatus::PartiallyFilled) {
+                                let mkt_i = sim.rng.gen_range(0..NUM_MARKETS);
+                                sim.resting[mkt_i].push((0, op.order_id, OrderSide::Bid));
+                            }
+                        }
+                    }
+                }
+                total += burst_t0.elapsed();
+
+                // Recovery probe: one cancel immediately after the burst
+                let rec_t0 = Instant::now();
+                let ts = sim.next_ts();
+                if let Some((_, _, req)) = sim.random_cancel() {
+                    black_box(sim.engine.process(black_box(req), ts));
+                } else {
+                    let (_, req) = sim.random_post_order();
+                    black_box(sim.engine.process(black_box(req), ts));
+                }
+                recovery_ns.push(rec_t0.elapsed().as_nanos() as u64);
+            }
+            total
+        })
+    });
+
+    print_percentiles("burst_profile/burst_ops", &mut burst_op_ns);
+
+    if !recovery_ns.is_empty() {
+        recovery_ns.sort_unstable();
+        let p50_idx = (recovery_ns.len() * 500).saturating_sub(1) / 1000;
+        let p99_idx = (recovery_ns.len() * 990).saturating_sub(1) / 1000;
+        let p50 = recovery_ns[p50_idx.min(recovery_ns.len() - 1)];
+        let p99 = recovery_ns[p99_idx.min(recovery_ns.len() - 1)];
+        println!(
+            "\n[burst_profile] post-burst recovery: p50 = {:.2}µs  p99 = {:.2}µs  (n={})",
+            p50 as f64 / 1_000.0,
+            p99 as f64 / 1_000.0,
+            recovery_ns.len(),
+        );
+        print_hdr_histogram("burst_profile/recovery", &recovery_ns);
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Deep-book setup helper
+//
+// Builds a SimState with `target_levels_per_side` unique price levels on
+// each side of each market.  Uses spread_ticks = (level+1)*2 to guarantee
+// no bid/ask crossing.  max_orders is raised accordingly.
+// ---------------------------------------------------------------------------
+
+fn build_deep_sim(target_levels_per_side: usize) -> SimState {
+    let max_orders = target_levels_per_side * 2 + 200;
+    let rng = StdRng::seed_from_u64(SEED ^ 0xDEAD_BEEF_DEAD_0001);
+    let mut engine = MatchingEngine::new(FeeConfig::default(), 5.0);
+
+    for i in 0..NUM_MARKETS {
+        engine.add_market(Market {
+            id:            market_id(i),
+            base:          base_asset(i),
+            quote:         usdc(),
+            max_orders,
+            min_order_size: QUANTITY_SCALE / 100,
+            price_tick:    TICK,
+            quantity_tick: 1,
+            maker_fee_bps: -1,
+            taker_fee_bps: 5,
+        });
+    }
+
+    let mut nonces = vec![0u64; NUM_MMS + 2];
+    let mut ts = 1u64;
+
+    // Large balance: 100M * scale (same ceiling as SimState::build but won't overflow u64)
+    let big_usdc  = 100_000_000 * PRICE_SCALE;
+    let big_base  = 100_000_000 * QUANTITY_SCALE;
+
+    for mm in 0..NUM_MMS as u8 {
+        let u = user(mm);
+        engine.process(Request::Deposit(DepositRequest {
+            user: u.clone(),
+            asset: usdc(),
+            amount: big_usdc,
+            l1_tx_hash: { let mut h = [0u8; 32]; h[0] = mm; h[31] = 0xDD; h },
+        }), ts);
+        ts += 1;
+        for i in 0..NUM_MARKETS {
+            engine.process(Request::Deposit(DepositRequest {
+                user: u.clone(),
+                asset: base_asset(i),
+                amount: big_base,
+                l1_tx_hash: { let mut h = [0u8; 32]; h[0] = mm; h[1] = i as u8; h[31] = 0xDD; h },
+            }), ts);
+            ts += 1;
+        }
+    }
+
+    let taker = user(NUM_MMS as u8);
+    engine.process(Request::Deposit(DepositRequest {
+        user: taker.clone(),
+        asset: usdc(),
+        amount: big_usdc,
+        l1_tx_hash: [0xddu8; 32],
+    }), ts);
+    ts += 1;
+    for i in 0..NUM_MARKETS {
+        engine.process(Request::Deposit(DepositRequest {
+            user: taker.clone(),
+            asset: base_asset(i),
+            amount: big_base,
+            l1_tx_hash: { let mut h = [0xddu8; 32]; h[1] = i as u8; h },
+        }), ts);
+        ts += 1;
+    }
+
+    let mut resting: Vec<Vec<(u8, OrderId, OrderSide)>> =
+        (0..NUM_MARKETS).map(|_| Vec::new()).collect();
+
+    for level in 0..target_levels_per_side {
+        // *2 ensures each level is unique and no bid/ask pair crosses at mid
+        let spread_ticks = (level as u64 + 1) * 2;
+        for (mkt_i, resting_mkt) in resting.iter_mut().enumerate() {
+            for &side in &[OrderSide::Bid, OrderSide::Ask] {
+                let mm = (level % NUM_MMS) as u8;
+                let price = match side {
+                    OrderSide::Bid => MID_PRICE.saturating_sub(spread_ticks * TICK),
+                    OrderSide::Ask => MID_PRICE + spread_ticks * TICK,
+                };
+                nonces[mm as usize] += 1;
+                let nonce = nonces[mm as usize];
+                let responses = engine.process(
+                    Request::PostOrder(PostOrderRequest {
+                        user:            user(mm),
+                        market:          market_id(mkt_i),
+                        side,
+                        order_type:      OrderType::GoodTillCanceled,
+                        price,
+                        quantity:        QUANTITY_SCALE,
+                        nonce,
+                        client_order_id: None,
+                        signature:       vec![0u8; 65],
+                    }),
+                    ts,
+                );
+                ts += 1;
+                for r in &responses {
+                    if let Response::OrderPosted(op) = r {
+                        if matches!(op.status, OrderStatus::Open | OrderStatus::PartiallyFilled) {
+                            resting_mkt.push((mm, op.order_id, side));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    SimState { engine, resting, nonces, ts, rng }
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark: deep_book
+//
+// Pre-populates each order book to 10, 100, 1 000, and 5 000 price levels
+// per side before starting the MM workload.  Measures insertion and
+// cancellation cost at depth vs. the empty-book baseline.  Latency delta
+// as a function of book depth isolates BTreeMap lookup overhead.
+// ---------------------------------------------------------------------------
+
+fn bench_deep_book(c: &mut Criterion) {
+    let mut group = c.benchmark_group("deep_book");
+    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(300);
+
+    // levels_per_side → approximate BTreeMap depth per order book
+    for &levels in &[0usize, 100, 1_000, 5_000] {
+        let label = if levels == 0 {
+            "baseline_~10lvl".to_string()
+        } else {
+            format!("depth_{levels}lvl_per_side")
+        };
+
+        let mut sim = if levels == 0 {
+            SimState::build()
+        } else {
+            build_deep_sim(levels)
+        };
+        let mut timings: Vec<u64> = Vec::with_capacity(20_000);
+
+        group.bench_with_input(
+            BenchmarkId::new("insert_cancel_at_depth", &label),
+            &levels,
+            |b, _| {
+                b.iter_custom(|iters| {
+                    let mut total = Duration::ZERO;
+                    for _ in 0..iters {
+                        let ts = sim.next_ts();
+                        let roll: u8 = sim.rng.gen_range(0..100);
+                        let t0 = Instant::now();
+                        if roll < 50 {
+                            if let Some((_, _, req)) = sim.random_cancel() {
+                                black_box(sim.engine.process(black_box(req), ts));
+                            } else {
+                                let (_, req) = sim.random_post_order();
+                                black_box(sim.engine.process(black_box(req), ts));
+                            }
+                        } else {
+                            let (_, req) = sim.random_post_order();
+                            let resp = sim.engine.process(black_box(req), ts);
+                            for r in &resp {
+                                if let Response::OrderPosted(op) = r {
+                                    if matches!(op.status, OrderStatus::Open | OrderStatus::PartiallyFilled) {
+                                        let mkt_i = sim.rng.gen_range(0..NUM_MARKETS);
+                                        sim.resting[mkt_i].push((0, op.order_id, OrderSide::Bid));
+                                    }
+                                }
+                            }
+                            black_box(resp);
+                        }
+                        let elapsed = t0.elapsed();
+                        total += elapsed;
+                        timings.push(elapsed.as_nanos() as u64);
+                    }
+                    total
+                })
+            },
+        );
+
+        print_percentiles(&label, &mut timings);
+        timings.clear();
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // Criterion wiring
 // ---------------------------------------------------------------------------
 
@@ -842,5 +1283,9 @@ criterion_group!(
     bench_latency_percentiles,
     bench_component_breakdown,
     bench_batched_throughput,
+    bench_fill_ratio_sweep,
+    bench_concurrent_takers,
+    bench_burst_profile,
+    bench_deep_book,
 );
 criterion_main!(benches);

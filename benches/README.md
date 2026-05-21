@@ -118,27 +118,56 @@ Expected runtime: ~5.5 minutes (setup + 300 s run).
 
 ---
 
-## Comparison with Hyperliquid
+## Credible comparisons
 
-Hyperliquid publishes two figures:
-- **200,000 ops/sec execution ceiling** (documented as execution-bottlenecked;
-  consensus can theoretically sustain >1M ops/sec per their technical docs).
-- **p50 ≈ 200 ms, p99 ≈ 900 ms** end-to-end latency from a colocated client.
+### Table 1 — Engine-layer isolation (methodology-equivalent)
 
-Vela is **not comparable on throughput** today — Vela's execution layer
-processes ~134–156 ops/sec in the HTTP benchmarks, five orders of magnitude
-below Hyperliquid's execution ceiling.  The gap is expected:
+Both engines measured in isolation: no consensus, no networking, no signature
+verification on the hot path.  The only confound is hardware.
 
-1. Hyperliquid's 200k figure is for their native binary protocol with a custom
-   HyperCore execution engine.  Vela uses a standard Axum HTTP stack.
-2. Hyperliquid's architecture is purpose-built for throughput.  Vela's current
-   bottleneck is the single-threaded engine mutex behind the batch dispatcher.
-3. No attempt has been made to parallelize Vela's matching engine yet.
+| Engine | Hardware | Throughput ceiling |
+|---|---|---|
+| **Vela** | Apple M3 | **2,500,000 ops/sec** |
+| Pulse | Apple M2 Pro | 125,000 ops/sec |
 
-Vela's latency numbers **appear lower** than Hyperliquid's published p50 only
-because Hyperliquid's 200 ms floor is driven by HyperBFT consensus round-trips
-(2-of-3 validators in a datacenter).  Vela has no consensus layer; these are
-pure execution-layer figures.
+These are the **most credible cross-engine figures** in this document.
+
+### Table 2 — System-level reference (not directly comparable)
+
+Hyperliquid's published figures include HyperBFT consensus, real networking,
+and production-grade validation pipelines.  They are listed here as context.
+
+| Metric | Hyperliquid (published) |
+|---|---|
+| Execution layer ceiling | 200,000 ops/sec |
+| Consensus throughput (theoretical) | >1,000,000 ops/sec |
+| End-to-end p50 (colocated) | 200 ms |
+| End-to-end p99 (colocated) | 900 ms |
+
+**Vela has no comparable system-level figure yet.**  A consensus-inclusive
+benchmark (real networking, HyperBFT-equivalent round-trips, production
+signature verification) will be published as a separate document once a
+consensus layer exists.
+
+Placing Vela's engine-isolation throughput (2.5M ops/sec) next to
+Hyperliquid's system-level throughput (200k ops/sec) in the same table is
+misleading.  The numbers measure different things.  Do not do this.
+
+---
+
+## Tier 4 — Additional workload benchmarks (`benches/matching.rs`)
+
+Four new benchmark groups added in addition to the existing seven:
+
+| Group | What it measures |
+|---|---|
+| `fill_ratio_sweep` | Cancel/fill ratio variants: 98/2, 90/10, 80/20, 50/50 |
+| `concurrent_takers` | N simultaneous taker IOCs (1, 4, 8, 16) — amortised per-taker latency |
+| `burst_profile` | 50-MM burst (cancel+repost) + recovery probe |
+| `deep_book` | Insert/cancel cost at 10, 100, 1 000, 5 000 price levels per side |
+
+All new benchmarks also emit an HDR latency histogram (10 equal-width buckets)
+alongside the existing `[latency]` percentile lines.
 
 ---
 
