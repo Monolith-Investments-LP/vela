@@ -2,6 +2,7 @@
 // in `openapi::openapi_spec`. Standard 128 blows out on the paths tree.
 #![recursion_limit = "512"]
 
+pub mod agent_schema;
 pub mod agents;
 pub mod algos;
 pub mod anchor;
