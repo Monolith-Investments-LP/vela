@@ -1,5 +1,3 @@
-'use client'
-
 import type { ReactNode } from 'react'
 
 const PF = "var(--font-playfair), 'Playfair Display', serif"
