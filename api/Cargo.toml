@@ -13,6 +13,7 @@ path = "src/main.rs"
 types = { workspace = true }
 engine = { workspace = true }
 perp = { path = "../perp" }
+fix = { path = "../fix" }
 zkvm = { path = "../zkvm" }
 tee = { path = "../tee" }
 committee = { path = "../committee" }

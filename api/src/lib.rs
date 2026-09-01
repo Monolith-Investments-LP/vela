@@ -14,6 +14,7 @@ pub mod committee_handler;
 pub mod credit;
 pub mod da;
 pub mod feeds;
+pub mod fix_gateway;
 pub mod handler;
 pub mod historical;
 pub mod listings;
@@ -357,6 +358,12 @@ impl AppState {
         tokio::spawn(handler::run_fee_tier_task(Arc::clone(&state)));
         tokio::spawn(handler::run_listing_task(Arc::clone(&state)));
         tokio::spawn(credit::run_expiry_task(Arc::clone(&state)));
+
+        // FIX 4.4 gateway: only spawn when explicitly configured
+        // (VELA_FIX_BIND=host:port). Silent no-op otherwise.
+        if let Some(cfg) = crate::fix_gateway::FixGatewayConfig::from_env() {
+            tokio::spawn(crate::fix_gateway::run_listener(Arc::clone(&state), cfg));
+        }
 
         state
     }
