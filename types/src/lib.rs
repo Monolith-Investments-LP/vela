@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
 use thiserror::Error;
 
 // --------------------------------------------------------------------------
@@ -392,37 +391,127 @@ impl UserMetadata {
     }
 }
 
+/// Fixed-size ring buffer for replay-protection nonces.
+///
+/// Stores the last `NONCE_WINDOW_SIZE` accepted nonces in a fixed array.
+/// When full, the oldest entry is evicted before inserting the new one.
+/// A nonce is rejected if it is already present or (when full) not strictly
+/// greater than the minimum nonce in the window.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NonceWindow {
-    window: BTreeSet<Nonce>,
+    window: [Nonce; NONCE_WINDOW_SIZE],
+    len: usize,
 }
 
 impl NonceWindow {
     pub fn new() -> Self {
         NonceWindow {
-            window: BTreeSet::new(),
+            window: [0u64; NONCE_WINDOW_SIZE],
+            len: 0,
         }
     }
 
     pub fn accept(&mut self, nonce: Nonce) -> bool {
-        if self.window.len() >= NONCE_WINDOW_SIZE {
-            let min = match self.window.iter().next().copied() {
-                Some(m) => m,
-                None => return false,
-            };
-            if nonce <= min || self.window.contains(&nonce) {
+        if self.len < NONCE_WINDOW_SIZE {
+            // Window not yet full — reject duplicates only.
+            if self.window[..self.len].contains(&nonce) {
                 return false;
             }
-            self.window.remove(&min);
-        } else if self.window.contains(&nonce) {
+            self.window[self.len] = nonce;
+            self.len += 1;
+            return true;
+        }
+
+        // Window full: find minimum and enforce monotonic advance.
+        let (min_idx, &min_val) = self.window
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, &v)| v)
+            .unwrap();
+
+        if nonce <= min_val || self.window.contains(&nonce) {
             return false;
         }
-        self.window.insert(nonce);
+
+        // Evict oldest (minimum) entry and insert new nonce in its slot.
+        self.window[min_idx] = nonce;
         true
     }
 
     pub fn min(&self) -> Option<Nonce> {
-        self.window.iter().next().copied()
+        if self.len == 0 {
+            None
+        } else {
+            self.window[..self.len].iter().copied().min()
+        }
+    }
+
+    pub fn contains(&self, nonce: Nonce) -> bool {
+        let active = if self.len < NONCE_WINDOW_SIZE { &self.window[..self.len] } else { &self.window };
+        active.contains(&nonce)
+    }
+
+    pub fn iter_active(&self) -> impl Iterator<Item = Nonce> + '_ {
+        let active = if self.len < NONCE_WINDOW_SIZE { &self.window[..self.len] } else { &self.window };
+        active.iter().copied()
+    }
+
+    /// Merge `other` into `self`: add every nonce in `other` that is not
+    /// already in `self`.
+    ///
+    /// Used in the phase-3 shard-delta fold to ensure that nonces accepted by
+    /// different shards for the same user are all preserved, regardless of
+    /// iteration order.
+    ///
+    /// When the union of both windows exceeds `NONCE_WINDOW_SIZE`, the
+    /// smallest-valued (oldest) nonces are evicted — the same policy as
+    /// `accept()`.  The result is always a valid `NonceWindow`.
+    pub fn merge(&mut self, other: &NonceWindow) {
+        let self_active: &[Nonce] = if self.len < NONCE_WINDOW_SIZE {
+            &self.window[..self.len]
+        } else {
+            &self.window
+        };
+        let other_active: &[Nonce] = if other.len < NONCE_WINDOW_SIZE {
+            &other.window[..other.len]
+        } else {
+            &other.window
+        };
+
+        // Collect the union into a stack buffer (at most 2 × NONCE_WINDOW_SIZE entries).
+        let mut combined = [0u64; NONCE_WINDOW_SIZE * 2];
+        let mut combined_len = 0usize;
+
+        for &n in self_active {
+            combined[combined_len] = n;
+            combined_len += 1;
+        }
+        for &n in other_active {
+            if !combined[..combined_len].contains(&n) {
+                combined[combined_len] = n;
+                combined_len += 1;
+            }
+        }
+
+        if combined_len <= NONCE_WINDOW_SIZE {
+            // Fits — store all entries.
+            self.window = [0u64; NONCE_WINDOW_SIZE];
+            self.len = combined_len;
+            for (i, &n) in combined[..combined_len].iter().enumerate() {
+                self.window[i] = n;
+            }
+        } else {
+            // Overflow: keep the NONCE_WINDOW_SIZE largest nonces.
+            // Evicting the smallest is consistent with accept()'s eviction
+            // policy, and prevents the floor from being lowered by a merge.
+            combined[..combined_len].sort_unstable();
+            let keep_start = combined_len - NONCE_WINDOW_SIZE;
+            self.window = [0u64; NONCE_WINDOW_SIZE];
+            self.len = NONCE_WINDOW_SIZE;
+            for (i, &n) in combined[keep_start..combined_len].iter().enumerate() {
+                self.window[i] = n;
+            }
+        }
     }
 }
 

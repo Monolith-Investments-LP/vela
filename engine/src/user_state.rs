@@ -369,8 +369,8 @@ impl UserState {
 
             let current = self.metadata.entry(user.clone()).or_insert_with(|| snap_m.clone());
 
-            // Apply nonce_window from final (it's authoritative from the shard)
-            current.nonce_window = final_m.nonce_window.clone();
+            // Merge nonce windows: union all shards' accepted nonces so no shard overwrites another.
+            current.nonce_window.merge(&final_m.nonce_window);
 
             // Apply total_quoted_notional delta
             let notional_delta =
@@ -479,6 +479,130 @@ impl UserState {
                         .insert((order.user.clone(), coid.clone()), market_id.clone());
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use types::{NonceWindow, UserId, NONCE_WINDOW_SIZE};
+
+    fn test_user() -> UserId {
+        UserId([0xAB; 20])
+    }
+
+    fn make_meta(uid: &UserId, nonces: &[u64]) -> UserMetadata {
+        let mut w = NonceWindow::new();
+        for &n in nonces {
+            w.accept(n);
+        }
+        UserMetadata {
+            user: uid.clone(),
+            nonce_window: w,
+            open_order_ids: [0u64; 64],
+            credit_ratio: 1.0,
+            total_quoted_notional: 0,
+            actual_collateral: 0,
+            ref_by: None,
+            ref_earnings: 0,
+            referred_users: vec![],
+        }
+    }
+
+    fn active_nonces(state: &UserState, uid: &UserId) -> Vec<u64> {
+        let w = &state.metadata[uid].nonce_window;
+        let mut v: Vec<u64> = w.iter_active().collect();
+        v.sort_unstable();
+        v
+    }
+
+    // (b) Two shards, different nonces — both must appear in the merged window.
+    #[test]
+    fn nonce_merge_different_nonces() {
+        let mut state = UserState::new(1.0);
+        let uid = test_user();
+
+        let snap = make_meta(&uid, &[]);
+        let final_a = make_meta(&uid, &[1]);
+        let final_b = make_meta(&uid, &[2]);
+
+        let mut snap_map = HashMap::new();
+        snap_map.insert(uid.clone(), snap);
+
+        let mut final_map_a = HashMap::new();
+        final_map_a.insert(uid.clone(), final_a);
+        let mut final_map_b = HashMap::new();
+        final_map_b.insert(uid.clone(), final_b);
+
+        state.apply_metadata_delta(&final_map_a, &snap_map);
+        state.apply_metadata_delta(&final_map_b, &snap_map);
+
+        let nonces = active_nonces(&state, &uid);
+        assert!(nonces.contains(&1), "nonce 1 from shard A must be retained");
+        assert!(nonces.contains(&2), "nonce 2 from shard B must be retained");
+    }
+
+    // (c) Two shards, same nonce — merge must be idempotent; nonce appears once.
+    #[test]
+    fn nonce_merge_idempotent() {
+        let mut state = UserState::new(1.0);
+        let uid = test_user();
+
+        let snap = make_meta(&uid, &[]);
+        let final_a = make_meta(&uid, &[5]);
+        let final_b = make_meta(&uid, &[5]);
+
+        let mut snap_map = HashMap::new();
+        snap_map.insert(uid.clone(), snap);
+
+        let mut final_map_a = HashMap::new();
+        final_map_a.insert(uid.clone(), final_a);
+        let mut final_map_b = HashMap::new();
+        final_map_b.insert(uid.clone(), final_b);
+
+        state.apply_metadata_delta(&final_map_a, &snap_map);
+        state.apply_metadata_delta(&final_map_b, &snap_map);
+
+        let nonces = active_nonces(&state, &uid);
+        let count = nonces.iter().filter(|&&n| n == 5).count();
+        assert_eq!(count, 1, "duplicate nonce must appear exactly once after merge");
+    }
+
+    // (d) Overflow: merging more than NONCE_WINDOW_SIZE total nonces evicts the oldest.
+    #[test]
+    fn nonce_merge_overflow_evicts_oldest() {
+        let mut state = UserState::new(1.0);
+        let uid = test_user();
+
+        // Shard A: nonces 1..=NONCE_WINDOW_SIZE (oldest)
+        // Shard B: nonces (NONCE_WINDOW_SIZE+1)..=(2*NONCE_WINDOW_SIZE) (newest)
+        let a_nonces: Vec<u64> = (1..=(NONCE_WINDOW_SIZE as u64)).collect();
+        let b_nonces: Vec<u64> =
+            ((NONCE_WINDOW_SIZE as u64 + 1)..=(2 * NONCE_WINDOW_SIZE as u64)).collect();
+
+        let snap = make_meta(&uid, &[]);
+        let final_a = make_meta(&uid, &a_nonces);
+        let final_b = make_meta(&uid, &b_nonces);
+
+        let mut snap_map = HashMap::new();
+        snap_map.insert(uid.clone(), snap);
+
+        let mut final_map_a = HashMap::new();
+        final_map_a.insert(uid.clone(), final_a);
+        let mut final_map_b = HashMap::new();
+        final_map_b.insert(uid.clone(), final_b);
+
+        state.apply_metadata_delta(&final_map_a, &snap_map);
+        state.apply_metadata_delta(&final_map_b, &snap_map);
+
+        let nonces = active_nonces(&state, &uid);
+        assert_eq!(nonces.len(), NONCE_WINDOW_SIZE, "window must not exceed NONCE_WINDOW_SIZE");
+        for &n in &b_nonces {
+            assert!(nonces.contains(&n), "newest nonce {} must be retained", n);
+        }
+        for &n in &a_nonces {
+            assert!(!nonces.contains(&n), "oldest nonce {} must be evicted on overflow", n);
         }
     }
 }
