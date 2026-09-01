@@ -244,6 +244,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/referral/register", post(register_referral))
         .route("/referral/:address", get(get_referral_handler))
         .route("/leaderboard", get(get_leaderboard))
+        .route("/points/:address", get(get_points_handler))
         .route("/anchors", get(get_anchors))
         .route("/incidents", get(get_incidents))
         .route("/admin/incidents", post(create_incident))
@@ -901,6 +902,7 @@ async fn record_order_and_fills(
                 timestamp: f.timestamp,
                 side: side_to_str(f.side).to_string(),
                 synthetic: false,
+                toxicity_score: f.toxicity_score,
             });
             // Cap at 100k fills per market, evicting oldest first.
             let market_count = fills_guard
@@ -3009,48 +3011,184 @@ async fn fees_public_handler(State(state): State<Arc<AppState>>) -> impl IntoRes
     })))
 }
 
-async fn get_leaderboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+// ---------------------------------------------------------------------------
+// Points system — volume-weighted, toxicity-gated.
+//
+// Formula:
+//   maker_points   = notional_usdc × MAKER_MULTIPLIER
+//   taker_points   = notional_usdc × (1.0 − toxicity_score)
+//   referral_bonus = ref_earnings_usdc × REFERRAL_MULTIPLIER
+//
+// Rationale:
+// - Makers get a bonus because liquidity provision is the scarce resource
+//   we're trying to attract.
+// - Takers get penalized proportional to how toxic their flow was. A wash
+//   trader whose fills all score near 1.0 earns near-zero taker points.
+// - Synthetic (MM-bot) fills have toxicity_score = 0.0 and count normally
+//   for volume, but wash-loop trades between the same wallet score high
+//   on the OFI accumulator so the toxicity gate catches them naturally.
+// ---------------------------------------------------------------------------
+
+const POINTS_MAKER_MULTIPLIER: f64 = 1.5;
+const POINTS_REFERRAL_MULTIPLIER: f64 = 0.5;
+/// 30-day rolling window for leaderboard eligibility.
+const POINTS_WINDOW_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
+
+/// Convert a fill's `price * quantity` (each in 1e6 fixed-point) to a
+/// USDC notional as `f64`.
+fn fill_notional_usdc(price: u64, quantity: u64) -> f64 {
+    (price as f64 * quantity as f64) / 1_000_000_000_000.0
+}
+
+/// Compute (maker_points, taker_points) for a single fill.
+fn fill_points(fill: &StoredFill) -> (f64, f64) {
+    let notional = fill_notional_usdc(fill.price, fill.quantity);
+    let maker = notional * POINTS_MAKER_MULTIPLIER;
+    let clean = (1.0 - fill.toxicity_score).clamp(0.0, 1.0);
+    let taker = notional * clean;
+    (maker, taker)
+}
+
+#[derive(Default, Clone, Copy)]
+struct PointsBreakdown {
+    maker_points: f64,
+    taker_points: f64,
+    volume_usdc: f64,
+    maker_count: u64,
+    taker_count: u64,
+    toxic_taker_count: u64,
+}
+
+impl PointsBreakdown {
+    fn total(&self) -> f64 {
+        self.maker_points + self.taker_points
+    }
+}
+
+/// Aggregate points per address across all fills in `state.fills`,
+/// filtered to the rolling 30-day window.
+async fn points_by_address(state: &AppState) -> std::collections::HashMap<String, PointsBreakdown> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let cutoff = now_ms.saturating_sub(POINTS_WINDOW_MS);
+
     let fills = state.fills.lock().await;
-    let mut volume_map: std::collections::HashMap<String, (f64, u64, u64)> =
+    let mut out: std::collections::HashMap<String, PointsBreakdown> =
         std::collections::HashMap::new();
     for fill in fills.iter() {
-        let notional = fill.price as f64 * fill.quantity as f64 / 1_000_000_000_000.0;
-        let taker = fill.taker_address.to_lowercase();
-        let maker = fill.maker_address.to_lowercase();
-        let e = volume_map.entry(taker).or_insert((0.0, 0, 0));
-        e.0 += notional;
-        e.1 += 1;
-        let e2 = volume_map.entry(maker).or_insert((0.0, 0, 0));
-        e2.0 += notional;
-        e2.2 += 1;
+        if fill.timestamp < cutoff {
+            continue;
+        }
+        let (maker_pts, taker_pts) = fill_points(fill);
+        let notional = fill_notional_usdc(fill.price, fill.quantity);
+
+        let maker_entry = out.entry(fill.maker_address.to_lowercase()).or_default();
+        maker_entry.maker_points += maker_pts;
+        maker_entry.volume_usdc += notional;
+        maker_entry.maker_count += 1;
+
+        let taker_entry = out.entry(fill.taker_address.to_lowercase()).or_default();
+        taker_entry.taker_points += taker_pts;
+        taker_entry.volume_usdc += notional;
+        taker_entry.taker_count += 1;
+        if fill.toxicity_score > 0.5 {
+            taker_entry.toxic_taker_count += 1;
+        }
     }
-    drop(fills);
-    let mut traders: Vec<serde_json::Value> = volume_map
-        .into_iter()
-        .map(|(addr, (vol, taker_count, maker_count))| {
+    out
+}
+
+async fn get_points_handler(
+    Path(address): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let addr = address.to_lowercase();
+    let by_addr = points_by_address(&state).await;
+    let breakdown = by_addr.get(&addr).copied().unwrap_or_default();
+
+    // Referral bonus from persistent metadata.
+    let referral_bonus = {
+        let us = state.shards.user_state.read().await;
+        let user_id = match UserId::from_hex(&addr) {
+            Ok(u) => u,
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse::<()>::err("invalid address")),
+                )
+                    .into_response()
+            }
+        };
+        us.metadata
+            .get(&user_id)
+            .map(|m| (m.ref_earnings as f64 / 1_000_000.0) * POINTS_REFERRAL_MULTIPLIER)
+            .unwrap_or(0.0)
+    };
+
+    let total = breakdown.total() + referral_bonus;
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "address": addr,
+            "window_days": 30,
+            "total_points": format!("{:.2}", total),
+            "maker_points": format!("{:.2}", breakdown.maker_points),
+            "taker_points": format!("{:.2}", breakdown.taker_points),
+            "referral_points": format!("{:.2}", referral_bonus),
+            "volume_usdc": format!("{:.2}", breakdown.volume_usdc),
+            "maker_fill_count": breakdown.maker_count,
+            "taker_fill_count": breakdown.taker_count,
+            "toxic_taker_fill_count": breakdown.toxic_taker_count,
+            "formula": {
+                "maker_multiplier": POINTS_MAKER_MULTIPLIER,
+                "referral_multiplier": POINTS_REFERRAL_MULTIPLIER,
+                "taker_penalty": "notional * (1 - toxicity_score); fills with score > 0.5 are counted as toxic",
+            },
+        }))),
+    )
+        .into_response()
+}
+
+async fn get_leaderboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    // Points and volume leaderboards both roll off the same 30-day window
+    // computed from `state.fills`. Points is the primary ranking now;
+    // volume stays exposed for consumers who want the raw number.
+    let by_addr = points_by_address(&state).await;
+
+    let mut traders: Vec<serde_json::Value> = by_addr
+        .iter()
+        .map(|(addr, b)| {
             serde_json::json!({
                 "address": addr,
-                "volume_usdc": format!("{:.2}", vol),
-                "fill_count": taker_count + maker_count,
-                "maker_count": maker_count,
-                "taker_count": taker_count,
+                "total_points": format!("{:.2}", b.total()),
+                "maker_points": format!("{:.2}", b.maker_points),
+                "taker_points": format!("{:.2}", b.taker_points),
+                "volume_usdc": format!("{:.2}", b.volume_usdc),
+                "fill_count": b.maker_count + b.taker_count,
+                "maker_count": b.maker_count,
+                "taker_count": b.taker_count,
+                "toxic_taker_count": b.toxic_taker_count,
             })
         })
         .collect();
     traders.sort_by(|a, b| {
-        let va: f64 = a["volume_usdc"]
+        let pa: f64 = a["total_points"]
             .as_str()
             .unwrap_or("0")
             .parse()
             .unwrap_or(0.0);
-        let vb: f64 = b["volume_usdc"]
+        let pb: f64 = b["total_points"]
             .as_str()
             .unwrap_or("0")
             .parse()
             .unwrap_or(0.0);
-        vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
+        pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
     });
     traders.truncate(20);
+
     let us = state.shards.user_state.read().await;
     let mut referrers: Vec<serde_json::Value> = us
         .metadata
@@ -3061,6 +3199,8 @@ async fn get_leaderboard(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "address": user.to_hex(),
                 "referred_count": m.referred_users.len(),
                 "earnings_usdc": format!("{:.6}", m.ref_earnings as f64 / 1_000_000.0),
+                "referral_points": format!("{:.2}",
+                    (m.ref_earnings as f64 / 1_000_000.0) * POINTS_REFERRAL_MULTIPLIER),
             })
         })
         .collect();
@@ -3075,7 +3215,13 @@ async fn get_leaderboard(State(state): State<Arc<AppState>>) -> impl IntoRespons
         Json(ApiResponse::ok(serde_json::json!({
             "top_traders": traders,
             "top_referrers": referrers,
-            "period": "all_time",
+            "period": "30d_rolling",
+            "ranked_by": "total_points",
+            "formula": {
+                "maker_multiplier": POINTS_MAKER_MULTIPLIER,
+                "referral_multiplier": POINTS_REFERRAL_MULTIPLIER,
+                "taker_penalty": "notional * (1 - toxicity_score)",
+            },
         }))),
     )
         .into_response()
@@ -3942,5 +4088,73 @@ mod tee_tests {
             .unwrap()
             .starts_with("sha256:"));
         assert_eq!(body["data"]["total_batches"], 0);
+    }
+}
+
+#[cfg(test)]
+mod points_tests {
+    use super::{fill_notional_usdc, fill_points, POINTS_MAKER_MULTIPLIER};
+    use crate::types::StoredFill;
+
+    fn mk_fill(price: u64, qty: u64, toxicity: f64) -> StoredFill {
+        StoredFill {
+            id: String::new(),
+            market_id: String::new(),
+            price,
+            quantity: qty,
+            maker_order_id: 0,
+            taker_order_id: 0,
+            maker_address: String::new(),
+            taker_address: String::new(),
+            timestamp: 0,
+            side: String::new(),
+            synthetic: false,
+            toxicity_score: toxicity,
+        }
+    }
+
+    #[test]
+    fn notional_scales_from_fixed_point() {
+        // price = 100 USDC (100 × 1e6), qty = 2 BTC (2 × 1e6) → 200 USDC
+        let n = fill_notional_usdc(100 * 1_000_000, 2 * 1_000_000);
+        assert!((n - 200.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn clean_fill_gives_maker_bonus_and_full_taker() {
+        let fill = mk_fill(100 * 1_000_000, 2 * 1_000_000, 0.0);
+        let (m, t) = fill_points(&fill);
+        assert!((m - 200.0 * POINTS_MAKER_MULTIPLIER).abs() < 1e-9);
+        assert!((t - 200.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn toxic_taker_earns_reduced_points() {
+        // toxicity = 0.75 → taker gets 25% of notional
+        let fill = mk_fill(100 * 1_000_000, 2 * 1_000_000, 0.75);
+        let (_m, t) = fill_points(&fill);
+        assert!((t - 200.0 * 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fully_toxic_taker_earns_zero() {
+        let fill = mk_fill(100 * 1_000_000, 2 * 1_000_000, 1.0);
+        let (m, t) = fill_points(&fill);
+        // Maker still gets full points even when the fill was toxic —
+        // makers aren't punished for being victims of adverse selection.
+        assert!((m - 200.0 * POINTS_MAKER_MULTIPLIER).abs() < 1e-9);
+        assert_eq!(t, 0.0);
+    }
+
+    #[test]
+    fn toxicity_score_clamps_out_of_range() {
+        // Guard against corrupted scores. (1 - 1.5).clamp(0, 1) = 0.
+        let fill = mk_fill(100 * 1_000_000, 2 * 1_000_000, 1.5);
+        let (_m, t) = fill_points(&fill);
+        assert_eq!(t, 0.0);
+        // Negative score: (1 - (-0.2)).clamp(0, 1) = 1, taker gets full.
+        let fill_neg = mk_fill(100 * 1_000_000, 2 * 1_000_000, -0.2);
+        let (_m, t2) = fill_points(&fill_neg);
+        assert!((t2 - 200.0).abs() < 1e-9);
     }
 }

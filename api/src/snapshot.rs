@@ -332,6 +332,7 @@ pub fn replay_wal_entries(
                                 timestamp: entry.timestamp_ns / 1_000_000,
                                 side: String::new(),
                                 synthetic: false,
+                                toxicity_score: 0.0,
                             };
                             if let Some(order) = recovered_orders.get_mut(&fill.taker_order_id) {
                                 order.fills.push(OrderFillRecord {

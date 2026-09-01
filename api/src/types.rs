@@ -15,6 +15,12 @@ pub struct StoredFill {
     pub side: String,
     #[serde(default)]
     pub synthetic: bool,
+    /// Toxicity score for the taker order this fill contributed to,
+    /// in `[0.0, 1.0]`. Zero for synthetic / MM-bot fills that were not
+    /// scored on the hot path. Used to gate points and leaderboard
+    /// eligibility against wash-trading style behavior.
+    #[serde(default)]
+    pub toxicity_score: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

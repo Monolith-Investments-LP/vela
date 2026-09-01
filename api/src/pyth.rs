@@ -157,6 +157,7 @@ pub async fn pyth_feed_task(state: Arc<AppState>) {
                                 timestamp: fill_ts,
                                 side: side.to_string(),
                                 synthetic: true,
+                                toxicity_score: 0.0,
                             });
                         }
                     }
