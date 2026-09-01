@@ -9,10 +9,13 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Required for admin-token gated code paths to boot the api crate's
+  # AppState during tests.
+  ADMIN_TOKEN: ci-admin-token
 
 jobs:
-  build:
-    name: Build and Test
+  rust:
+    name: Rust — build, test, clippy, fmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +34,9 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
 
+      - name: Format check
+        run: cargo fmt --all -- --check
+
       - name: Build
         run: cargo build --workspace
 
@@ -38,9 +44,35 @@ jobs:
         run: cargo test --workspace
 
       - name: Clippy
-        run: cargo clippy --workspace
+        run: cargo clippy --workspace -- -D warnings
 
-      - name: Format check
+  contracts:
+    name: Contracts — forge fmt, build, test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Show forge version
+        run: forge --version
+
+      - name: Forge fmt check
+        run: forge fmt --check
+
+      - name: Forge build
+        run: forge build --sizes
+
+      - name: Forge test
+        run: forge test -vvv
 
   bench:
     name: Benchmarks (dry run)
