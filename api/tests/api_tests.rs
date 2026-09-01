@@ -75,6 +75,10 @@ struct EngineWithUser {
 type EngineWithUser2 = MatchingEngine;
 
 fn test_server(engine: MatchingEngine) -> TestServer {
+    // AppState::new() panics without ADMIN_TOKEN.
+    if std::env::var("ADMIN_TOKEN").is_err() {
+        std::env::set_var("ADMIN_TOKEN", "test-admin-token");
+    }
     let state = AppState::new(engine, make_wal());
     let router = api::build_router(state);
     TestServer::new(router).unwrap()
@@ -274,6 +278,9 @@ mod ws_tests {
     /// Create a server that shares its AppState with the caller so tests can
     /// inject events directly via `state.feeds`.  WS requires HTTP transport.
     fn ws_test_server(engine: MatchingEngine) -> (axum_test::TestServer, Arc<AppState>) {
+        if std::env::var("ADMIN_TOKEN").is_err() {
+            std::env::set_var("ADMIN_TOKEN", "test-admin-token");
+        }
         let state = AppState::new(engine, super::make_wal());
         let state_clone = state.clone();
         let config = TestServerConfig::builder().http_transport().build();

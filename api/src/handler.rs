@@ -7190,6 +7190,12 @@ mod tee_tests {
     fn make_test_app() -> TestServer {
         use engine::MatchingEngine;
         use types::FeeConfig;
+        // AppState::new() panics without ADMIN_TOKEN; set a stub for the
+        // in-process test harness. Safe here because these tests never
+        // exercise the admin-token gated endpoints.
+        if std::env::var("ADMIN_TOKEN").is_err() {
+            std::env::set_var("ADMIN_TOKEN", "test-admin-token");
+        }
         let engine = MatchingEngine::new(FeeConfig::default(), 5.0);
         let wal_dir = std::env::temp_dir().join(format!(
             "vela_tee_test_wal_{}",
