@@ -172,6 +172,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
     Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics_handler))
         .route("/status", get(status_handler))
         .route("/fees/public", get(fees_public_handler))
         .route("/markets", get(list_markets))
@@ -228,6 +229,75 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+/// Prometheus text-format exposition of engine + api counters.
+///
+/// Deliberately hand-rolled: the alternative is pulling in `prometheus`
+/// (heavy) or `metrics` + `metrics-exporter-prometheus` (two crates for
+/// a page of metrics). This function costs ~15 lines and has no runtime
+/// state.
+async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    use std::fmt::Write;
+    use std::sync::atomic::Ordering;
+
+    let batch_size_hist = state.batch_metrics.batch_size_histogram_snapshot();
+    let (batch_count, batch_size_sum) = {
+        let n = batch_size_hist.len() as u64;
+        let s: u64 = batch_size_hist.iter().sum();
+        (n, s)
+    };
+
+    let mut out = String::with_capacity(1024);
+
+    let _ = writeln!(out, "# HELP vela_orders_today_total Orders accepted since UTC midnight.");
+    let _ = writeln!(out, "# TYPE vela_orders_today_total counter");
+    let _ = writeln!(out, "vela_orders_today_total {}", state.orders_today.load(Ordering::Relaxed));
+
+    let _ = writeln!(out, "# HELP vela_fills_today_total Fills produced since UTC midnight.");
+    let _ = writeln!(out, "# TYPE vela_fills_today_total counter");
+    let _ = writeln!(out, "vela_fills_today_total {}", state.fills_today.load(Ordering::Relaxed));
+
+    let _ = writeln!(out, "# HELP vela_volume_today_usdc_micro Volume since UTC midnight (USDC, ×1e6).");
+    let _ = writeln!(out, "# TYPE vela_volume_today_usdc_micro counter");
+    let _ = writeln!(out, "vela_volume_today_usdc_micro {}", state.volume_today_usdc.load(Ordering::Relaxed));
+
+    let _ = writeln!(out, "# HELP vela_ws_clients Current WebSocket client count.");
+    let _ = writeln!(out, "# TYPE vela_ws_clients gauge");
+    let _ = writeln!(out, "vela_ws_clients {}", state.ws_client_count.load(Ordering::Relaxed));
+
+    let _ = writeln!(out, "# HELP vela_last_snapshot_timestamp_ms Wall-clock ms since UNIX epoch of last snapshot.");
+    let _ = writeln!(out, "# TYPE vela_last_snapshot_timestamp_ms gauge");
+    let _ = writeln!(out, "vela_last_snapshot_timestamp_ms {}", state.last_snapshot_ts.load(Ordering::Relaxed));
+
+    let _ = writeln!(out, "# HELP vela_batch_dispatch_latency_ns Latency of most recent batch dispatch (ns).");
+    let _ = writeln!(out, "# TYPE vela_batch_dispatch_latency_ns gauge");
+    let _ = writeln!(out, "vela_batch_dispatch_latency_ns {}", state.batch_metrics.batch_dispatch_latency_ns());
+
+    let _ = writeln!(out, "# HELP vela_orders_per_second Rolling-1s orders-per-second estimate.");
+    let _ = writeln!(out, "# TYPE vela_orders_per_second gauge");
+    let _ = writeln!(out, "vela_orders_per_second {}", state.batch_metrics.orders_per_second());
+
+    let _ = writeln!(out, "# HELP vela_batch_count_total Batches dispatched (since last histogram drain).");
+    let _ = writeln!(out, "# TYPE vela_batch_count_total counter");
+    let _ = writeln!(out, "vela_batch_count_total {}", batch_count);
+
+    let _ = writeln!(out, "# HELP vela_batch_size_sum_total Sum of orders across recorded batches (since last histogram drain).");
+    let _ = writeln!(out, "# TYPE vela_batch_size_sum_total counter");
+    let _ = writeln!(out, "vela_batch_size_sum_total {}", batch_size_sum);
+
+    let _ = writeln!(out, "# HELP vela_order_channel_send_failures_total Order-channel sends that failed (dispatcher gone).");
+    let _ = writeln!(out, "# TYPE vela_order_channel_send_failures_total counter");
+    let _ = writeln!(out, "vela_order_channel_send_failures_total {}", crate::ORDER_CHANNEL_SEND_FAILURES.load(Ordering::Relaxed));
+
+    let _ = writeln!(out, "# HELP vela_feed_no_subscriber_drops_total Broadcast publishes with zero live receivers.");
+    let _ = writeln!(out, "# TYPE vela_feed_no_subscriber_drops_total counter");
+    let _ = writeln!(out, "vela_feed_no_subscriber_drops_total {}", crate::feeds::FEED_NO_SUBSCRIBER_DROPS.load(Ordering::Relaxed));
+
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        out,
+    )
 }
 
 async fn ws_handler(
