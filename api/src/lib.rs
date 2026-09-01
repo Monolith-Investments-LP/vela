@@ -1,3 +1,7 @@
+// Bumped for the OpenAPI spec's deeply-nested `serde_json::json!` literal
+// in `openapi::openapi_spec`. Standard 128 blows out on the paths tree.
+#![recursion_limit = "512"]
+
 pub mod agents;
 pub mod algos;
 pub mod anchor;
@@ -9,6 +13,7 @@ pub mod handler;
 pub mod historical;
 pub mod listings;
 pub mod mm;
+pub mod openapi;
 pub mod pyth;
 pub mod rate_limit;
 pub mod snapshot;
