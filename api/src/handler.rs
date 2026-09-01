@@ -245,6 +245,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/referral/:address", get(get_referral_handler))
         .route("/leaderboard", get(get_leaderboard))
         .route("/points/:address", get(get_points_handler))
+        .route("/portfolio/:address", get(get_portfolio_handler))
+        .route("/portfolio/:address/csv", get(get_portfolio_csv_handler))
         .route("/anchors", get(get_anchors))
         .route("/incidents", get(get_incidents))
         .route("/admin/incidents", post(create_incident))
@@ -3152,6 +3154,332 @@ async fn get_points_handler(
         .into_response()
 }
 
+// ---------------------------------------------------------------------------
+// Portfolio dashboard — realized/unrealized PnL, FIFO/HIFO cost basis, CSV.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CostBasisMethod {
+    Fifo,
+    Hifo,
+}
+
+impl CostBasisMethod {
+    fn parse(s: Option<&str>) -> Self {
+        match s.map(|v| v.to_ascii_lowercase()) {
+            Some(v) if v == "hifo" => Self::Hifo,
+            _ => Self::Fifo,
+        }
+    }
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Fifo => "FIFO",
+            Self::Hifo => "HIFO",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Lot {
+    /// Base quantity in fixed-point 1e6.
+    quantity: u64,
+    /// Price per unit of base, fixed-point 1e6.
+    price: u64,
+    /// Retained for future FIFO-with-holding-period reporting (tax
+    /// long-term vs short-term). Not consumed by the v1 matcher.
+    #[allow(dead_code)]
+    timestamp: u64,
+}
+
+/// Split a market id like "BTC-USDC" into `(base, quote)`. Returns `None`
+/// on malformed ids.
+fn split_market(market_id: &str) -> Option<(&str, &str)> {
+    market_id.split_once('-')
+}
+
+/// Notional in USDC as f64, from fixed-point price × quantity (each 1e6).
+fn notional_from_fixed(price: u64, quantity: u64) -> f64 {
+    (price as f64 * quantity as f64) / 1_000_000_000_000.0
+}
+
+#[derive(Debug, Default)]
+struct MarketPnl {
+    market_id: String,
+    base_asset: String,
+    /// Realized PnL in USDC.
+    realized_usdc: f64,
+    /// Base held right now (sum(buys) − sum(sells)).
+    position_base: f64,
+    /// Weighted-average cost basis per base unit for the current position.
+    cost_basis_price: f64,
+    /// Sum of remaining lots' quantity × price / QUANTITY_SCALE, in USDC.
+    open_cost_basis_usdc: f64,
+    /// If we have a mark price, current value of the open position in USDC.
+    mark_price_usdc: Option<f64>,
+    /// Unrealized PnL = current_value − open_cost_basis_usdc.
+    unrealized_usdc: Option<f64>,
+    fill_count: u64,
+}
+
+/// Compute per-market PnL for `address` using the chosen cost-basis method.
+///
+/// For each fill in the market where the address participated, apply
+/// buy/sell to a per-market lot queue. Realized PnL accumulates when a
+/// sell consumes buy lots (or vice versa if the user was short — v1
+/// treats short exposure symmetrically).
+fn compute_market_pnl(
+    address: &str,
+    market_id: &str,
+    fills: &[&StoredFill],
+    mark_price_fp: Option<u64>,
+    method: CostBasisMethod,
+) -> MarketPnl {
+    let addr = address.to_ascii_lowercase();
+    let (base, _quote) = match split_market(market_id) {
+        Some(p) => p,
+        None => (market_id, "USDC"),
+    };
+
+    // Sorted-by-timestamp list of (is_buy_from_user_perspective, price, qty)
+    let mut trades: Vec<(bool, u64, u64, u64)> = Vec::new();
+    for f in fills {
+        let is_maker = f.maker_address.to_ascii_lowercase() == addr;
+        let is_taker = f.taker_address.to_ascii_lowercase() == addr;
+        if !is_maker && !is_taker {
+            continue;
+        }
+        // `fill.side` is the taker's side. If user is taker and side is bid,
+        // user bought base. If user is maker and taker was bidding, user
+        // sold base (the maker was on the ask side).
+        let taker_was_bidding = f.side.eq_ignore_ascii_case("bid");
+        let user_bought = (is_taker && taker_was_bidding) || (is_maker && !taker_was_bidding);
+        trades.push((user_bought, f.price, f.quantity, f.timestamp));
+    }
+    trades.sort_by_key(|(_, _, _, ts)| *ts);
+
+    let mut lots: std::collections::VecDeque<Lot> = std::collections::VecDeque::new();
+    let mut realized_usdc: f64 = 0.0;
+    let fill_count = trades.len() as u64;
+
+    for (buy, price, qty, ts) in trades {
+        if buy {
+            lots.push_back(Lot {
+                quantity: qty,
+                price,
+                timestamp: ts,
+            });
+        } else {
+            // Sell: draw from lots according to method until qty exhausted.
+            let mut remaining = qty;
+            while remaining > 0 && !lots.is_empty() {
+                let idx = match method {
+                    CostBasisMethod::Fifo => 0,
+                    CostBasisMethod::Hifo => lots
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(_, l)| l.price)
+                        .map(|(i, _)| i)
+                        .unwrap_or(0),
+                };
+                let mut lot = lots.remove(idx).unwrap();
+                let matched = lot.quantity.min(remaining);
+                let pnl_usdc =
+                    ((price as f64 - lot.price as f64) * matched as f64) / 1_000_000_000_000.0;
+                realized_usdc += pnl_usdc;
+                lot.quantity -= matched;
+                remaining -= matched;
+                if lot.quantity > 0 {
+                    // Push back in original position (front for FIFO, arbitrary
+                    // for HIFO since it re-picks the max next iteration).
+                    lots.insert(idx, lot);
+                }
+            }
+            // If `remaining > 0` after exhausting lots, the user went short
+            // (or opened a short). v1: silently ignore — treated as a fresh
+            // negative position. Realized PnL on that portion accrues on the
+            // eventual buy-to-cover.
+        }
+    }
+
+    // Compute open position from remaining lots.
+    let (open_qty_fp, open_notional_usdc) = lots.iter().fold((0u128, 0.0), |(q, n), l| {
+        (
+            q + l.quantity as u128,
+            n + notional_from_fixed(l.price, l.quantity),
+        )
+    });
+    let open_qty_f = open_qty_fp as f64 / 1_000_000.0;
+
+    let cost_basis_price = if open_qty_fp > 0 {
+        (open_notional_usdc / open_qty_f).max(0.0)
+    } else {
+        0.0
+    };
+
+    let mark_price_usdc = mark_price_fp.map(|p| p as f64 / 1_000_000.0);
+    let unrealized_usdc = mark_price_usdc.map(|mp| open_qty_f * mp - open_notional_usdc);
+
+    MarketPnl {
+        market_id: market_id.to_string(),
+        base_asset: base.to_string(),
+        realized_usdc,
+        position_base: open_qty_f,
+        cost_basis_price,
+        open_cost_basis_usdc: open_notional_usdc,
+        mark_price_usdc,
+        unrealized_usdc,
+        fill_count,
+    }
+}
+
+/// Return the current mark price (best_bid+best_ask midpoint) per market
+/// as a `HashMap<market_id, mid_price_fp>`. Falls back to best_bid or
+/// best_ask if one side is empty. `None` in the map if both sides empty.
+async fn mark_prices(state: &AppState) -> std::collections::HashMap<String, Option<u64>> {
+    let engine = state.engine.lock().await;
+    let mut out = std::collections::HashMap::new();
+    for (mid, book) in &engine.order_books {
+        let mid_price = match (book.best_bid(), book.best_ask()) {
+            (Some(b), Some(a)) => Some((b + a) / 2),
+            (Some(b), None) => Some(b),
+            (None, Some(a)) => Some(a),
+            (None, None) => None,
+        };
+        out.insert(mid.0.clone(), mid_price);
+    }
+    out
+}
+
+#[derive(serde::Deserialize)]
+struct PortfolioQuery {
+    method: Option<String>,
+}
+
+async fn get_portfolio_handler(
+    Path(address): Path<String>,
+    Query(q): Query<PortfolioQuery>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let addr = address.to_ascii_lowercase();
+    let method = CostBasisMethod::parse(q.method.as_deref());
+
+    let marks = mark_prices(&state).await;
+    let fills = state.fills.lock().await;
+
+    // Group user's fills by market_id.
+    let mut per_market: std::collections::HashMap<String, Vec<&StoredFill>> =
+        std::collections::HashMap::new();
+    for f in fills.iter() {
+        if f.maker_address.to_ascii_lowercase() == addr
+            || f.taker_address.to_ascii_lowercase() == addr
+        {
+            per_market.entry(f.market_id.clone()).or_default().push(f);
+        }
+    }
+
+    let mut markets: Vec<serde_json::Value> = per_market
+        .into_iter()
+        .map(|(mid, fs)| {
+            let mark = marks.get(&mid).copied().flatten();
+            let p = compute_market_pnl(&addr, &mid, &fs, mark, method);
+            serde_json::json!({
+                "market_id": p.market_id,
+                "base_asset": p.base_asset,
+                "position_base": format!("{:.6}", p.position_base),
+                "cost_basis_price_usdc": format!("{:.6}", p.cost_basis_price),
+                "open_cost_basis_usdc": format!("{:.6}", p.open_cost_basis_usdc),
+                "mark_price_usdc": p.mark_price_usdc.map(|v| format!("{:.6}", v)),
+                "realized_pnl_usdc": format!("{:.6}", p.realized_usdc),
+                "unrealized_pnl_usdc": p.unrealized_usdc.map(|v| format!("{:.6}", v)),
+                "fill_count": p.fill_count,
+            })
+        })
+        .collect();
+    markets.sort_by(|a, b| {
+        a["market_id"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["market_id"].as_str().unwrap_or(""))
+    });
+
+    let total_realized: f64 = markets
+        .iter()
+        .filter_map(|m| m["realized_pnl_usdc"].as_str())
+        .filter_map(|s| s.parse::<f64>().ok())
+        .sum();
+    let total_unrealized: f64 = markets
+        .iter()
+        .filter_map(|m| m["unrealized_pnl_usdc"].as_str())
+        .filter_map(|s| s.parse::<f64>().ok())
+        .sum();
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "address": addr,
+            "cost_basis_method": method.as_str(),
+            "total_realized_pnl_usdc": format!("{:.6}", total_realized),
+            "total_unrealized_pnl_usdc": format!("{:.6}", total_unrealized),
+            "total_pnl_usdc": format!("{:.6}", total_realized + total_unrealized),
+            "markets": markets,
+        }))),
+    )
+        .into_response()
+}
+
+async fn get_portfolio_csv_handler(
+    Path(address): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let addr = address.to_ascii_lowercase();
+    let fills = state.fills.lock().await;
+
+    let mut out = String::from(
+        "timestamp_ms,market,side,price_usdc,quantity_base,notional_usdc,counterparty,fill_id\n",
+    );
+    // Sort user's fills by timestamp for stable, replayable CSV output.
+    let mut user_fills: Vec<&StoredFill> = fills
+        .iter()
+        .filter(|f| {
+            f.maker_address.to_ascii_lowercase() == addr
+                || f.taker_address.to_ascii_lowercase() == addr
+        })
+        .collect();
+    user_fills.sort_by_key(|f| f.timestamp);
+
+    for f in user_fills {
+        let is_taker = f.taker_address.to_ascii_lowercase() == addr;
+        let taker_was_bidding = f.side.eq_ignore_ascii_case("bid");
+        let user_bought = (is_taker && taker_was_bidding) || (!is_taker && !taker_was_bidding);
+        let side = if user_bought { "buy" } else { "sell" };
+        let counterparty = if is_taker {
+            &f.maker_address
+        } else {
+            &f.taker_address
+        };
+        let price_usdc = f.price as f64 / 1_000_000.0;
+        let qty_base = f.quantity as f64 / 1_000_000.0;
+        let notional = notional_from_fixed(f.price, f.quantity);
+        out.push_str(&format!(
+            "{},{},{},{:.6},{:.6},{:.6},{},{}\n",
+            f.timestamp, f.market_id, side, price_usdc, qty_base, notional, counterparty, f.id
+        ));
+    }
+
+    (
+        StatusCode::OK,
+        [
+            (axum::http::header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                "attachment; filename=vela-fills.csv",
+            ),
+        ],
+        out,
+    )
+        .into_response()
+}
+
 async fn get_leaderboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // Points and volume leaderboards both roll off the same 30-day window
     // computed from `state.fills`. Points is the primary ranking now;
@@ -4156,5 +4484,125 @@ mod points_tests {
         let fill_neg = mk_fill(100 * 1_000_000, 2 * 1_000_000, -0.2);
         let (_m, t2) = fill_points(&fill_neg);
         assert!((t2 - 200.0).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod portfolio_tests {
+    use super::{compute_market_pnl, CostBasisMethod};
+    use crate::types::StoredFill;
+
+    /// Helper: make a StoredFill where `user_is_taker` and taker was on the
+    /// given side ("bid" for buy, "ask" for sell).
+    fn mk_fill(
+        market: &str,
+        user_is_taker: bool,
+        taker_side: &str,
+        price: u64,
+        qty: u64,
+        ts: u64,
+    ) -> StoredFill {
+        let user = "0xuser".to_string();
+        let counter = "0xcounter".to_string();
+        StoredFill {
+            id: format!("fill-{}", ts),
+            market_id: market.to_string(),
+            price,
+            quantity: qty,
+            maker_order_id: 0,
+            taker_order_id: 0,
+            maker_address: if user_is_taker {
+                counter.clone()
+            } else {
+                user.clone()
+            },
+            taker_address: if user_is_taker {
+                user.clone()
+            } else {
+                counter.clone()
+            },
+            timestamp: ts,
+            side: taker_side.to_string(),
+            synthetic: false,
+            toxicity_score: 0.0,
+        }
+    }
+
+    #[test]
+    fn fifo_buy_then_sell_at_higher_price_realizes_profit() {
+        // User buys 1 BTC @ 100, then sells 1 BTC @ 120. Realized = +20 USDC.
+        let f1 = mk_fill("BTC-USDC", true, "bid", 100 * 1_000_000, 1_000_000, 1);
+        let f2 = mk_fill("BTC-USDC", true, "ask", 120 * 1_000_000, 1_000_000, 2);
+        let fills = vec![&f1, &f2];
+        let p = compute_market_pnl("0xuser", "BTC-USDC", &fills, None, CostBasisMethod::Fifo);
+        assert!((p.realized_usdc - 20.0).abs() < 1e-6);
+        assert_eq!(p.position_base, 0.0);
+    }
+
+    #[test]
+    fn fifo_partial_sell_leaves_remaining_lot() {
+        // Buy 2 @ 100, sell 1 @ 150 → realized = 50, 1 left at cost 100.
+        let f1 = mk_fill("BTC-USDC", true, "bid", 100 * 1_000_000, 2_000_000, 1);
+        let f2 = mk_fill("BTC-USDC", true, "ask", 150 * 1_000_000, 1_000_000, 2);
+        let fills = vec![&f1, &f2];
+        let p = compute_market_pnl("0xuser", "BTC-USDC", &fills, None, CostBasisMethod::Fifo);
+        assert!((p.realized_usdc - 50.0).abs() < 1e-6);
+        assert!((p.position_base - 1.0).abs() < 1e-9);
+        assert!((p.cost_basis_price - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fifo_vs_hifo_disagree_on_realized() {
+        // Two buys at different prices, one sell — FIFO takes older/cheaper
+        // lot first, HIFO takes higher-priced lot first.
+        // Buy 1 @ 100 (t=1), Buy 1 @ 200 (t=2), Sell 1 @ 150 (t=3).
+        let f1 = mk_fill("BTC-USDC", true, "bid", 100 * 1_000_000, 1_000_000, 1);
+        let f2 = mk_fill("BTC-USDC", true, "bid", 200 * 1_000_000, 1_000_000, 2);
+        let f3 = mk_fill("BTC-USDC", true, "ask", 150 * 1_000_000, 1_000_000, 3);
+        let fills = vec![&f1, &f2, &f3];
+
+        let fifo = compute_market_pnl("0xuser", "BTC-USDC", &fills, None, CostBasisMethod::Fifo);
+        // FIFO matches sell vs. lot @ 100 → +50 realized. Remaining 1 @ 200.
+        assert!((fifo.realized_usdc - 50.0).abs() < 1e-6);
+        assert!((fifo.cost_basis_price - 200.0).abs() < 1e-6);
+
+        let hifo = compute_market_pnl("0xuser", "BTC-USDC", &fills, None, CostBasisMethod::Hifo);
+        // HIFO matches sell vs. lot @ 200 → -50 realized. Remaining 1 @ 100.
+        assert!((hifo.realized_usdc - (-50.0)).abs() < 1e-6);
+        assert!((hifo.cost_basis_price - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn unrealized_pnl_uses_mark_price() {
+        // Buy 1 @ 100, hold. Mark @ 120 → unrealized = +20.
+        let f1 = mk_fill("BTC-USDC", true, "bid", 100 * 1_000_000, 1_000_000, 1);
+        let fills = vec![&f1];
+        let p = compute_market_pnl(
+            "0xuser",
+            "BTC-USDC",
+            &fills,
+            Some(120 * 1_000_000),
+            CostBasisMethod::Fifo,
+        );
+        assert!((p.unrealized_usdc.unwrap() - 20.0).abs() < 1e-6);
+        assert!((p.position_base - 1.0).abs() < 1e-9);
+        assert!((p.cost_basis_price - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn user_as_maker_bought_when_taker_was_asking() {
+        // Taker's side = "ask" (selling), maker (user) was on the bid side
+        // → user bought 1 @ 100.
+        let f1 = mk_fill("BTC-USDC", false, "ask", 100 * 1_000_000, 1_000_000, 1);
+        let fills = vec![&f1];
+        let p = compute_market_pnl(
+            "0xuser",
+            "BTC-USDC",
+            &fills,
+            Some(100 * 1_000_000),
+            CostBasisMethod::Fifo,
+        );
+        assert!((p.position_base - 1.0).abs() < 1e-9);
+        assert!((p.cost_basis_price - 100.0).abs() < 1e-6);
     }
 }
