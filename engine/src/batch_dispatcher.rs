@@ -85,8 +85,16 @@ impl BatchMetrics {
     }
 
     /// Snapshot of all recorded batch sizes (not sorted).
+    /// Does NOT clear the histogram; use `snapshot_and_clear` for that.
     pub fn batch_size_histogram_snapshot(&self) -> Vec<u64> {
         self.batch_size_histogram.lock().unwrap().clone()
+    }
+
+    /// Drain the histogram and return all recorded batch sizes.
+    /// Callers must invoke this periodically to prevent unbounded growth.
+    pub fn snapshot_and_clear(&self) -> Vec<u64> {
+        let mut hist = self.batch_size_histogram.lock().unwrap();
+        std::mem::take(&mut *hist)
     }
 }
 

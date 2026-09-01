@@ -47,10 +47,19 @@ impl CreditSystem {
         base
     }
 
+    /// Evict all penalty entries that have expired at `now_us`.
+    /// Call periodically (e.g., from the batch dispatch loop) to bound map size
+    /// for the process lifetime.
+    pub fn evict_expired_penalties(&mut self, now_us: u64) {
+        self.penalties.retain(|_, p| p.expires_at > now_us);
+    }
+
     /// Apply a multiplicative credit penalty to `user` that expires after
     /// `duration_us` microseconds from `now_us`.
     /// Overwrites any existing penalty (resets the clock).
+    /// Also evicts all already-expired penalties to bound map size.
     pub fn apply_penalty(&mut self, user: UserId, multiplier: f64, duration_us: u64, now_us: u64) {
+        self.evict_expired_penalties(now_us);
         self.penalties.insert(user, CreditPenalty {
             expires_at: now_us.saturating_add(duration_us),
             multiplier,

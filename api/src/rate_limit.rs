@@ -21,6 +21,14 @@ impl RateLimiter {
         let now = Instant::now();
         let mut entry = self.requests.entry(key.to_string()).or_default();
         entry.retain(|t| now.duration_since(*t) < self.window);
+        if entry.is_empty() {
+            // All prior timestamps expired — evict the slot to bound map size,
+            // then fall through to insert the current request as a fresh entry.
+            drop(entry);
+            self.requests.remove(key);
+            self.requests.entry(key.to_string()).or_default().push(now);
+            return true;
+        }
         if entry.len() >= self.max_requests {
             return false;
         }

@@ -760,6 +760,8 @@ impl MatchingEngine {
     ///
     /// Returns one `Vec<Response>` per input request, in submission order.
     pub fn process_batch(&mut self, requests: Vec<(Request, Timestamp)>) -> Vec<Vec<Response>> {
+        let ts = requests.first().map(|(_, ts)| *ts).unwrap_or(self.timestamp);
+        self.credit_system.evict_expired_penalties(ts);
         requests
             .into_iter()
             .map(|(req, ts)| self.process(req, ts))
