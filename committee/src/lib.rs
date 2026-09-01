@@ -38,6 +38,12 @@ pub struct CommitteeKeypair {
     pub pub_key: G1Affine,
     /// Shamir shares, one per committee member.  Member i holds `shares[i-1]`.
     pub shares: Vec<Share>,
+    /// Per-node public key shares: `pk_i = share_i * G`. Any `t`
+    /// of these Lagrange-combine (in the exponent) back to the group
+    /// pub key. Publishing them lets external verifiers attribute a
+    /// bad `sk_i * R` share to a specific node offline, and lets
+    /// operators sanity-check that a rotated share set still adds up.
+    pub pub_key_shares: Vec<G1Affine>,
     /// Threshold configuration.
     pub config: CommitteeConfig,
 }
@@ -68,6 +74,13 @@ pub fn generate_committee_keypair(
     // Shamir shares
     let shares = generate_shares(secret, t, n, rng);
 
+    // Per-node public key shares: pk_i = share_i * G.
+    let mut pub_key_shares: Vec<G1Affine> = Vec::with_capacity(shares.len());
+    for share in &shares {
+        let pk_i = g1_generator_mul(&share.value.to_le_bytes())?;
+        pub_key_shares.push(G1Affine(pk_i.0));
+    }
+
     let config = CommitteeConfig {
         t,
         n,
@@ -77,6 +90,7 @@ pub fn generate_committee_keypair(
     Ok(CommitteeKeypair {
         pub_key,
         shares,
+        pub_key_shares,
         config,
     })
 }
@@ -234,6 +248,49 @@ impl ThresholdDecryptor {
     pub fn pending_count(&self) -> usize {
         self.entries.len()
     }
+}
+
+// --------------------------------------------------------------------------
+// Per-node public-key-share verification
+// --------------------------------------------------------------------------
+
+/// Given a subset of `t` per-node public key shares `pk_i = sk_i * G`,
+/// Lagrange-combine them in the exponent and check the result equals
+/// the group public key `PK = sk * G`. Uses:
+///
+///   PK == Σ λ_i * pk_i
+///
+/// (Lagrange interpolation in the exponent). Any mismatch means the
+/// published `pk_i` set is inconsistent — a swapped share config, a
+/// rotated key not fully propagated, or a compromised dealer.
+///
+/// This is a *sanity* check, not a NIZK proof of share correctness.
+/// A malicious dealer that generated a self-consistent bad share set
+/// would still pass. Full Chaum-Pedersen share proofs on every
+/// decrypt path are the audit-blocked follow-up.
+pub fn verify_pk_shares_reconstruct_group(
+    subset: &[(u8, G1Affine)],
+    group_pub_key: &G1Affine,
+) -> Result<bool> {
+    use bls_ops::{g1_add, g1_mul};
+    use shamir::lagrange_coefficient;
+
+    if subset.is_empty() {
+        bail!("empty subset");
+    }
+    let indices: Vec<u8> = subset.iter().map(|(i, _)| *i).collect();
+
+    let mut acc: Option<G1> = None;
+    for (idx, pk_i) in subset {
+        let lambda = lagrange_coefficient(*idx, &indices)?;
+        let scaled = g1_mul(&G1(pk_i.0), &lambda.to_le_bytes())?;
+        acc = Some(match acc {
+            None => scaled,
+            Some(prev) => g1_add(&prev, &scaled)?,
+        });
+    }
+    let recon = acc.unwrap();
+    Ok(recon.0 == group_pub_key.0)
 }
 
 // --------------------------------------------------------------------------
@@ -439,5 +496,49 @@ mod tests {
             valid: true,
         };
         assert!(proof.is_valid());
+    }
+
+    /// Verify that per-node public key shares Lagrange-reconstruct to
+    /// the group public key. This is the "trusted dealer set is
+    /// internally consistent" sanity check.
+    #[test]
+    fn pk_shares_reconstruct_group_key() {
+        let mut rng = make_rng();
+        let kp = generate_committee_keypair(3, 5, &mut rng).unwrap();
+        assert_eq!(kp.pub_key_shares.len(), 5);
+
+        // Pick any 3 of 5 nodes; reconstruction must match.
+        let subset: Vec<(u8, G1Affine)> = vec![
+            (kp.shares[0].index, kp.pub_key_shares[0].clone()),
+            (kp.shares[2].index, kp.pub_key_shares[2].clone()),
+            (kp.shares[4].index, kp.pub_key_shares[4].clone()),
+        ];
+        assert!(verify_pk_shares_reconstruct_group(&subset, &kp.pub_key).unwrap());
+
+        // A different subset must also match.
+        let subset2: Vec<(u8, G1Affine)> = vec![
+            (kp.shares[1].index, kp.pub_key_shares[1].clone()),
+            (kp.shares[3].index, kp.pub_key_shares[3].clone()),
+            (kp.shares[4].index, kp.pub_key_shares[4].clone()),
+        ];
+        assert!(verify_pk_shares_reconstruct_group(&subset2, &kp.pub_key).unwrap());
+    }
+
+    /// Tamper with one published pk_i: reconstruction must fail.
+    #[test]
+    fn tampered_pk_share_fails_reconstruction() {
+        let mut rng = make_rng();
+        let kp = generate_committee_keypair(3, 5, &mut rng).unwrap();
+
+        // Swap two nodes' pk_i deliberately.
+        let mut bad_shares = kp.pub_key_shares.clone();
+        bad_shares.swap(0, 1);
+
+        let subset: Vec<(u8, G1Affine)> = vec![
+            (kp.shares[0].index, bad_shares[0].clone()),
+            (kp.shares[1].index, bad_shares[1].clone()),
+            (kp.shares[2].index, bad_shares[2].clone()),
+        ];
+        assert!(!verify_pk_shares_reconstruct_group(&subset, &kp.pub_key).unwrap());
     }
 }
