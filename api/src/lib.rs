@@ -14,6 +14,7 @@ pub mod rate_limit;
 pub mod snapshot;
 pub mod toxicity_feed;
 pub mod types;
+pub mod vaults;
 pub mod wal;
 pub mod ws;
 
@@ -95,6 +96,8 @@ pub struct AppState {
     pub algos: crate::algos::AlgoRegistry,
     /// Pending / accepted / rejected permissionless market listings.
     pub listings: crate::listings::ListingRegistry,
+    /// MM credit vaults + per-LP share positions.
+    pub vaults: Arc<crate::vaults::VaultRegistry>,
     /// Admin bearer token — read from ADMIN_TOKEN at boot and used in
     /// constant-time comparisons via `AppState::verify_admin_token`.
     admin_token: String,
@@ -261,6 +264,7 @@ impl AppState {
             agents: crate::agents::AgentRegistry::new(),
             algos: std::sync::Arc::new(dashmap::DashMap::new()),
             listings: std::sync::Arc::new(dashmap::DashMap::new()),
+            vaults: crate::vaults::VaultRegistry::new(),
             admin_token,
         });
 

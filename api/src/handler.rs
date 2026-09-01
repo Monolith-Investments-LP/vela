@@ -266,6 +266,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/listings", get(list_listings))
         .route("/listings/:listing_id", get(get_listing))
         .route("/admin/listings/reject", post(admin_reject_listing))
+        .route("/vaults/create", post(create_vault))
+        .route("/vaults", get(list_vaults))
+        .route("/vaults/:vault_id", get(get_vault))
+        .route("/vaults/:vault_id/deposit", post(vault_deposit))
+        .route("/vaults/:vault_id/withdraw", post(vault_withdraw))
+        .route("/vaults/:vault_id/positions/:lp", get(get_lp_position))
         .route("/anchors", get(get_anchors))
         .route("/incidents", get(get_incidents))
         .route("/admin/incidents", post(create_incident))
@@ -3624,6 +3630,494 @@ async fn get_points_handler(
                 "referral_multiplier": POINTS_REFERRAL_MULTIPLIER,
                 "taker_penalty": "notional * (1 - toxicity_score); fills with score > 0.5 are counted as toxic",
             },
+        }))),
+    )
+        .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// MM credit vaults.
+//
+// LPs deposit USDC into an operator-managed vault; operator trades using
+// the vault's balance plus the shared MM credit ratio; PnL streams
+// pro-rata to LP shares. The operator is authorized to sign orders
+// on the vault's behalf via the existing agent-wallet path (a delegation
+// from vault.user_id → operator is registered at vault creation).
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct CreateVaultBody {
+    /// Human-readable vault name.
+    name: String,
+    /// Operator address (Ethereum hex). Authorised to submit orders
+    /// using the vault's derived user_id via agent-wallet path.
+    operator: String,
+    /// Per-vault credit ratio the credit system will apply. Defaults
+    /// to 5× if omitted; capped at 10× at accept time.
+    #[serde(default)]
+    credit_ratio: Option<f64>,
+    /// Delegation validity window in ms from now.
+    /// Defaults to 10 years; operator can refresh by re-registering.
+    #[serde(default)]
+    delegation_ttl_ms: Option<u64>,
+    /// Operator's signature over `vela:vault:create:{name}:{operator}:{nonce}`.
+    nonce: u64,
+    signature: String,
+}
+
+fn vault_create_signing_message(name: &str, operator: &str, nonce: u64) -> Vec<u8> {
+    format!("vela:vault:create:{}:{}:{}", name, operator, nonce).into_bytes()
+}
+
+async fn create_vault(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateVaultBody>,
+) -> impl IntoResponse {
+    let operator = match UserId::from_hex(&body.operator) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid operator address")),
+            )
+                .into_response()
+        }
+    };
+    let msg = vault_create_signing_message(&body.name, &body.operator, body.nonce);
+    if crate::auth::verify_matches_async(msg, body.signature.clone(), body.operator.clone())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err(
+                "operator signature did not match payload",
+            )),
+        )
+            .into_response();
+    }
+
+    let credit_ratio = body.credit_ratio.unwrap_or(5.0).clamp(1.0, 10.0);
+
+    let vault_id = crate::vaults::next_vault_id();
+    let user_id = crate::vaults::derive_vault_user_id(vault_id);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    // Register the operator as an agent for the vault's derived
+    // user_id. This lets operator submit orders with `user = vault.user_id`
+    // and pass sig check via the agent path — reusing all the machinery
+    // we already ship, no new sig plumbing.
+    let ttl = body
+        .delegation_ttl_ms
+        .unwrap_or(10 * 365 * 24 * 60 * 60 * 1_000);
+    state.agents.register(crate::agents::AgentDelegation {
+        master: user_id.clone(),
+        agent: operator.clone(),
+        expires_at_ms: now_ms + ttl,
+        // Unlimited notional per order — the vault operator needs full
+        // deployment of AUM, and the credit_system.check_credit path
+        // already enforces the vault's per-order collateral bounds.
+        max_notional_per_order: u64::MAX,
+        revoked: false,
+        nonce: body.nonce,
+    });
+
+    // Set the vault's credit ratio in the credit system.
+    {
+        let mut engine = state.engine.lock().await;
+        engine.set_credit_ratio(user_id.clone(), credit_ratio);
+    }
+
+    let vault = crate::vaults::Vault {
+        vault_id,
+        name: body.name.clone(),
+        operator: body.operator.to_lowercase(),
+        user_id: user_id.clone(),
+        credit_ratio,
+        total_shares_micro: 0,
+        cumulative_deposits_micro: 0,
+        cumulative_withdrawals_micro: 0,
+        created_at_ms: now_ms,
+    };
+    state.vaults.vaults.insert(vault_id, vault.clone());
+
+    (StatusCode::OK, Json(ApiResponse::ok(vault))).into_response()
+}
+
+async fn list_vaults(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    // Snapshot AUM per vault for the response so LPs can see current
+    // aum and share pricing without a second round-trip.
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let vaults: Vec<crate::vaults::Vault> = state
+        .vaults
+        .vaults
+        .iter()
+        .map(|v| v.value().clone())
+        .collect();
+
+    let us = state.shards.user_state.read().await;
+    for v in vaults {
+        let aum = us
+            .balances
+            .get(&(v.user_id.clone(), types::AssetId::from_str("USDC")))
+            .map(|b| b.available.saturating_add(b.locked))
+            .unwrap_or(0);
+        out.push(serde_json::json!({
+            "vault_id": v.vault_id,
+            "name": v.name,
+            "operator": v.operator,
+            "user_id": format!("0x{}", hex::encode(v.user_id.0)),
+            "credit_ratio": v.credit_ratio,
+            "aum_usdc_micro": aum,
+            "total_shares_micro": v.total_shares_micro.to_string(),
+            "cumulative_deposits_micro": v.cumulative_deposits_micro.to_string(),
+            "cumulative_withdrawals_micro": v.cumulative_withdrawals_micro.to_string(),
+            "created_at_ms": v.created_at_ms,
+        }));
+    }
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({ "vaults": out }))),
+    )
+        .into_response()
+}
+
+async fn get_vault(
+    Path(vault_id): Path<u64>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let vault = match state.vaults.vaults.get(&vault_id) {
+        Some(v) => v.value().clone(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::<()>::err("vault_id not found")),
+            )
+                .into_response()
+        }
+    };
+    let us = state.shards.user_state.read().await;
+    let aum = us
+        .balances
+        .get(&(vault.user_id.clone(), types::AssetId::from_str("USDC")))
+        .map(|b| b.available.saturating_add(b.locked))
+        .unwrap_or(0);
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "vault": vault,
+            "aum_usdc_micro": aum,
+            "share_price_micro": if vault.total_shares_micro == 0 {
+                "1000000".to_string() // 1.0 baseline
+            } else {
+                (aum as u128 * 1_000_000 / vault.total_shares_micro).to_string()
+            },
+        }))),
+    )
+        .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct VaultDepositBody {
+    /// LP address that debits USDC and credits shares.
+    lp: String,
+    /// USDC × 1e6 to deposit.
+    amount_micro: u64,
+    nonce: u64,
+    /// Signature by LP over
+    /// `vela:vault:deposit:{vault_id}:{amount_micro}:{nonce}`.
+    signature: String,
+}
+
+fn vault_deposit_signing_message(vault_id: u64, amount_micro: u64, nonce: u64) -> Vec<u8> {
+    format!("vela:vault:deposit:{}:{}:{}", vault_id, amount_micro, nonce).into_bytes()
+}
+
+async fn vault_deposit(
+    Path(vault_id): Path<u64>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<VaultDepositBody>,
+) -> impl IntoResponse {
+    let lp = match UserId::from_hex(&body.lp) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid lp address")),
+            )
+                .into_response()
+        }
+    };
+    let msg = vault_deposit_signing_message(vault_id, body.amount_micro, body.nonce);
+    if crate::auth::verify_matches_async(msg, body.signature.clone(), body.lp.clone())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("lp signature did not match payload")),
+        )
+            .into_response();
+    }
+    if body.amount_micro == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("amount_micro must be > 0")),
+        )
+            .into_response();
+    }
+
+    let vault_user_id = match state.vaults.vaults.get(&vault_id) {
+        Some(v) => v.value().user_id.clone(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::<()>::err("vault_id not found")),
+            )
+                .into_response()
+        }
+    };
+
+    // Move USDC from LP.available → vault.available, issue shares.
+    let (aum_before, total_shares_before) = {
+        let mut us = state.shards.user_state.write().await;
+        let lp_key = (lp.clone(), types::AssetId::from_str("USDC"));
+        let vault_key = (vault_user_id.clone(), types::AssetId::from_str("USDC"));
+
+        let lp_bal = us.balances.entry(lp_key).or_insert_with(|| types::Balance {
+            user: lp.clone(),
+            asset: types::AssetId::from_str("USDC"),
+            available: 0,
+            locked: 0,
+        });
+        if lp_bal.available < body.amount_micro {
+            return (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(ApiResponse::<()>::err(format!(
+                    "lp needs {} USDC micro available; has {}",
+                    body.amount_micro, lp_bal.available
+                ))),
+            )
+                .into_response();
+        }
+        lp_bal.available -= body.amount_micro;
+
+        let vault_bal = us
+            .balances
+            .entry(vault_key)
+            .or_insert_with(|| types::Balance {
+                user: vault_user_id.clone(),
+                asset: types::AssetId::from_str("USDC"),
+                available: 0,
+                locked: 0,
+            });
+        let aum_before = vault_bal.available.saturating_add(vault_bal.locked);
+        vault_bal.available += body.amount_micro;
+
+        let vault = state.vaults.vaults.get(&vault_id).unwrap();
+        (aum_before, vault.total_shares_micro)
+    };
+
+    let shares_issued =
+        crate::vaults::shares_for_deposit(body.amount_micro, aum_before, total_shares_before);
+
+    {
+        let mut v = state.vaults.vaults.get_mut(&vault_id).unwrap();
+        v.total_shares_micro += shares_issued;
+        v.cumulative_deposits_micro += body.amount_micro as u128;
+    }
+    {
+        let lp_key = (vault_id, body.lp.to_lowercase());
+        let mut pos = state.vaults.positions.entry(lp_key).or_default();
+        pos.shares_micro += shares_issued;
+        pos.cumulative_deposits_micro += body.amount_micro as u128;
+    }
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "vault_id": vault_id,
+            "lp": body.lp.to_lowercase(),
+            "amount_deposited_micro": body.amount_micro,
+            "shares_issued_micro": shares_issued.to_string(),
+        }))),
+    )
+        .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct VaultWithdrawBody {
+    lp: String,
+    shares_micro: String, // u128 as string to survive JSON
+    nonce: u64,
+    signature: String,
+}
+
+fn vault_withdraw_signing_message(vault_id: u64, shares_str: &str, nonce: u64) -> Vec<u8> {
+    format!("vela:vault:withdraw:{}:{}:{}", vault_id, shares_str, nonce).into_bytes()
+}
+
+async fn vault_withdraw(
+    Path(vault_id): Path<u64>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<VaultWithdrawBody>,
+) -> impl IntoResponse {
+    let lp = match UserId::from_hex(&body.lp) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid lp address")),
+            )
+                .into_response()
+        }
+    };
+    let msg = vault_withdraw_signing_message(vault_id, &body.shares_micro, body.nonce);
+    if crate::auth::verify_matches_async(msg, body.signature.clone(), body.lp.clone())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("lp signature did not match payload")),
+        )
+            .into_response();
+    }
+    let shares_to_burn: u128 = match body.shares_micro.parse() {
+        Ok(v) if v > 0 => v,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err(
+                    "shares_micro must be a positive integer",
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    let vault_user_id = match state.vaults.vaults.get(&vault_id) {
+        Some(v) => v.value().user_id.clone(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::<()>::err("vault_id not found")),
+            )
+                .into_response()
+        }
+    };
+
+    let lp_key = (vault_id, body.lp.to_lowercase());
+    {
+        let pos = state.vaults.positions.get(&lp_key);
+        let shares_available = pos.map(|p| p.shares_micro).unwrap_or(0);
+        if shares_available < shares_to_burn {
+            return (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(ApiResponse::<()>::err(format!(
+                    "lp has {} shares_micro, requested {}",
+                    shares_available, shares_to_burn
+                ))),
+            )
+                .into_response();
+        }
+    }
+
+    // Compute payout under a write lock so AUM and shares snapshot
+    // together, and vault.available >= payout is atomically true.
+    let payout = {
+        let mut us = state.shards.user_state.write().await;
+        let vault_key = (vault_user_id.clone(), types::AssetId::from_str("USDC"));
+        let vault_bal = us
+            .balances
+            .entry(vault_key)
+            .or_insert_with(|| types::Balance {
+                user: vault_user_id.clone(),
+                asset: types::AssetId::from_str("USDC"),
+                available: 0,
+                locked: 0,
+            });
+        let total_shares = state
+            .vaults
+            .vaults
+            .get(&vault_id)
+            .unwrap()
+            .total_shares_micro;
+        let aum = vault_bal.available.saturating_add(vault_bal.locked);
+        let payout = crate::vaults::usdc_for_shares(shares_to_burn, aum, total_shares);
+
+        if vault_bal.available < payout {
+            return (
+                StatusCode::CONFLICT,
+                Json(ApiResponse::<()>::err(format!(
+                    "vault has {} USDC available but withdrawal requires {} (locked in open positions)",
+                    vault_bal.available, payout
+                ))),
+            )
+                .into_response();
+        }
+        vault_bal.available -= payout;
+
+        let lp_bal_key = (lp.clone(), types::AssetId::from_str("USDC"));
+        let lp_bal = us
+            .balances
+            .entry(lp_bal_key)
+            .or_insert_with(|| types::Balance {
+                user: lp.clone(),
+                asset: types::AssetId::from_str("USDC"),
+                available: 0,
+                locked: 0,
+            });
+        lp_bal.available += payout;
+
+        payout
+    };
+
+    {
+        let mut v = state.vaults.vaults.get_mut(&vault_id).unwrap();
+        v.total_shares_micro -= shares_to_burn;
+        v.cumulative_withdrawals_micro += payout as u128;
+    }
+    {
+        let mut pos = state.vaults.positions.get_mut(&lp_key).unwrap();
+        pos.shares_micro -= shares_to_burn;
+        pos.cumulative_withdrawals_micro += payout as u128;
+    }
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "vault_id": vault_id,
+            "lp": body.lp.to_lowercase(),
+            "shares_burned_micro": shares_to_burn.to_string(),
+            "usdc_paid_out_micro": payout,
+        }))),
+    )
+        .into_response()
+}
+
+async fn get_lp_position(
+    Path((vault_id, lp)): Path<(u64, String)>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let key = (vault_id, lp.to_lowercase());
+    let pos = state
+        .vaults
+        .positions
+        .get(&key)
+        .map(|p| p.value().clone())
+        .unwrap_or_default();
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "vault_id": vault_id,
+            "lp": lp.to_lowercase(),
+            "shares_micro": pos.shares_micro.to_string(),
+            "cumulative_deposits_micro": pos.cumulative_deposits_micro.to_string(),
+            "cumulative_withdrawals_micro": pos.cumulative_withdrawals_micro.to_string(),
         }))),
     )
         .into_response()
