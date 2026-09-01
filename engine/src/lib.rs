@@ -11,7 +11,6 @@ pub mod market_shards;
 pub use batch_dispatcher::{BatchDispatcher, BatchedRequest, BatchMetrics};
 pub use matching_engine::MatchingEngine;
 pub use order_book::OrderBook;
-pub use cow_cache::CowCache;
 pub use delta_buffer::DeltaBuffer;
 pub use credit::CreditSystem;
 pub use ofi::ToxicityScorer;

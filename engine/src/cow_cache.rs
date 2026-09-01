@@ -1,3 +1,9 @@
+//! **EXPERIMENTAL — NOT ON THE PRODUCTION PATH.**
+//!
+//! `CowCache` is a copy-on-write cache prototype that was superseded by
+//! `DeltaBuffer` on the live engine.  Its benchmark numbers do not reflect
+//! production behavior.  Retained here for potential future use only.
+
 use std::collections::HashMap;
 use types::{AssetId, Balance, OrderId, Quantity, UserId, UserMetadata};
 use crate::order_book::OrderBook;

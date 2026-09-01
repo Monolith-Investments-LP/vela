@@ -730,7 +730,7 @@ fn bench_component_breakdown(c: &mut Criterion) {
     //    Measures the write+commit path that every order exercises.
     group.bench_function("cow_cache_roundtrip", |b| {
         use std::collections::HashMap;
-        use engine::CowCache;
+        use engine::cow_cache::CowCache;
 
         let mut balances: HashMap<_, Balance> = HashMap::new();
         let mut metadata: HashMap<_, UserMetadata> = HashMap::new();
