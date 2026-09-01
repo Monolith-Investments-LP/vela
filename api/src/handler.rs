@@ -262,6 +262,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/orders/algo/twap", post(post_twap_algo))
         .route("/orders/algo/cancel", post(cancel_algo))
         .route("/orders/algo/:parent_id", get(get_algo_status))
+        .route("/listings/propose", post(propose_listing))
+        .route("/listings", get(list_listings))
+        .route("/listings/:listing_id", get(get_listing))
+        .route("/admin/listings/reject", post(admin_reject_listing))
         .route("/anchors", get(get_anchors))
         .route("/incidents", get(get_incidents))
         .route("/admin/incidents", post(create_incident))
@@ -3623,6 +3627,369 @@ async fn get_points_handler(
         }))),
     )
         .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Permissionless market listing.
+//
+// Anyone posts a bond in USDC + market spec. Proposal enters a challenge
+// window (24h default). Operator or governance can reject and slash the
+// bond; otherwise the market auto-registers when the window elapses and
+// the bond is refunded to the proposer's available USDC balance.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct ProposeListingBody {
+    proposer: String,
+    /// Format: "BASE-QUOTE" (must be USDC for v1).
+    market_id: String,
+    base: String,
+    quote: String,
+    max_orders: usize,
+    min_order_size: u64,
+    price_tick: u64,
+    quantity_tick: u64,
+    nonce: u64,
+    signature: String,
+}
+
+fn listing_signing_message(market_id: &str, base: &str, quote: &str, nonce: u64) -> Vec<u8> {
+    format!(
+        "vela:listing:propose:{}:{}:{}:{}",
+        market_id, base, quote, nonce
+    )
+    .into_bytes()
+}
+
+async fn propose_listing(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ProposeListingBody>,
+) -> impl IntoResponse {
+    let proposer = match UserId::from_hex(&body.proposer) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid proposer address")),
+            )
+                .into_response()
+        }
+    };
+
+    // Signature check: proposer authorises the listing.
+    let msg = listing_signing_message(&body.market_id, &body.base, &body.quote, body.nonce);
+    if crate::auth::verify_matches_async(msg, body.signature.clone(), body.proposer.clone())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err(
+                "proposer signature did not match payload",
+            )),
+        )
+            .into_response();
+    }
+
+    // Basic sanity on the market spec.
+    if body.quote != "USDC" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("quote must be USDC in v1")),
+        )
+            .into_response();
+    }
+    if body.max_orders == 0
+        || body.min_order_size == 0
+        || body.price_tick == 0
+        || body.quantity_tick == 0
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err(
+                "max_orders / min_order_size / price_tick / quantity_tick must be > 0",
+            )),
+        )
+            .into_response();
+    }
+    if body.market_id != format!("{}-{}", body.base, body.quote) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err(
+                "market_id must equal '{base}-{quote}'",
+            )),
+        )
+            .into_response();
+    }
+
+    // Reject duplicate market_id (existing market or pending listing).
+    {
+        let engine = state.engine.lock().await;
+        if engine
+            .markets
+            .contains_key(&MarketId(body.market_id.clone()))
+        {
+            return (
+                StatusCode::CONFLICT,
+                Json(ApiResponse::<()>::err("market already exists")),
+            )
+                .into_response();
+        }
+    }
+    let dup = state.listings.iter().any(|l| {
+        l.market_id == body.market_id
+            && matches!(
+                l.status,
+                crate::listings::ListingStatus::Pending | crate::listings::ListingStatus::Accepted
+            )
+    });
+    if dup {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::<()>::err(
+                "market_id already has a pending or accepted proposal",
+            )),
+        )
+            .into_response();
+    }
+
+    // Debit bond from proposer's USDC balance.
+    let bond = crate::listings::bond_amount_micro();
+    {
+        let mut us = state.shards.user_state.write().await;
+        let key = (proposer.clone(), AssetId::from_str("USDC"));
+        let bal = us
+            .balances
+            .entry(key.clone())
+            .or_insert_with(|| types::Balance {
+                user: proposer.clone(),
+                asset: AssetId::from_str("USDC"),
+                available: 0,
+                locked: 0,
+            });
+        if bal.available < bond {
+            return (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(ApiResponse::<()>::err(format!(
+                    "proposer needs at least {} USDC micro available; has {}",
+                    bond, bal.available
+                ))),
+            )
+                .into_response();
+        }
+        bal.available -= bond;
+        bal.locked += bond;
+    }
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let challenge_ms = crate::listings::challenge_hours() * 3_600_000;
+
+    let listing_id = crate::listings::next_listing_id();
+    let proposal = crate::listings::ListingProposal {
+        listing_id,
+        proposer: body.proposer.to_lowercase(),
+        market_id: body.market_id.clone(),
+        base: body.base.clone(),
+        quote: body.quote.clone(),
+        max_orders: body.max_orders,
+        min_order_size: body.min_order_size,
+        price_tick: body.price_tick,
+        quantity_tick: body.quantity_tick,
+        bond_micro: bond,
+        proposed_at_ms: now_ms,
+        challenge_deadline_ms: now_ms + challenge_ms,
+        status: crate::listings::ListingStatus::Pending,
+        reject_reason: None,
+    };
+    state.listings.insert(listing_id, proposal.clone());
+
+    (StatusCode::OK, Json(ApiResponse::ok(proposal))).into_response()
+}
+
+async fn list_listings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut all: Vec<crate::listings::ListingProposal> = state
+        .listings
+        .iter()
+        .map(|entry| entry.value().clone())
+        .collect();
+    all.sort_by_key(|l| std::cmp::Reverse(l.proposed_at_ms));
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "listings": all,
+            "bond_micro": crate::listings::bond_amount_micro(),
+            "challenge_hours": crate::listings::challenge_hours(),
+        }))),
+    )
+        .into_response()
+}
+
+async fn get_listing(
+    Path(listing_id): Path<u64>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    match state.listings.get(&listing_id) {
+        Some(p) => (StatusCode::OK, Json(ApiResponse::ok(p.value().clone()))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()>::err("listing_id not found")),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RejectListingBody {
+    listing_id: u64,
+    reason: String,
+}
+
+async fn admin_reject_listing(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<RejectListingBody>,
+) -> impl IntoResponse {
+    let provided = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !state.verify_admin_token(provided) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("unauthorized")),
+        )
+            .into_response();
+    }
+
+    let (proposer_hex, bond_micro) = match state.listings.get_mut(&body.listing_id) {
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::<()>::err("listing_id not found")),
+            )
+                .into_response()
+        }
+        Some(mut p) => {
+            if !matches!(p.status, crate::listings::ListingStatus::Pending) {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(ApiResponse::<()>::err("listing is not pending")),
+                )
+                    .into_response();
+            }
+            p.status = crate::listings::ListingStatus::Rejected;
+            p.reject_reason = Some(body.reason);
+            (p.proposer.clone(), p.bond_micro)
+        }
+    };
+
+    // Slash the bond: locked → fee_balances["USDC"] (operator take).
+    let proposer_id = match UserId::from_hex(&proposer_hex) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::err(
+                    "proposer address unparseable — bond stuck",
+                )),
+            )
+                .into_response();
+        }
+    };
+    {
+        let mut us = state.shards.user_state.write().await;
+        let key = (proposer_id, AssetId::from_str("USDC"));
+        if let Some(bal) = us.balances.get_mut(&key) {
+            let slash = bond_micro.min(bal.locked);
+            bal.locked -= slash;
+            *us.fee_balances.entry("USDC".to_string()).or_insert(0) += slash;
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "listing_id": body.listing_id,
+            "status": "rejected",
+            "bond_slashed_micro": bond_micro,
+        }))),
+    )
+        .into_response()
+}
+
+/// Long-running task: every minute, walk pending listings whose
+/// challenge window has expired, add the market to the engine, refund
+/// the bond, and flip status to Accepted.
+pub async fn run_listing_task(state: Arc<AppState>) {
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+    ticker.tick().await; // Skip immediate first tick.
+
+    loop {
+        ticker.tick().await;
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let ready: Vec<crate::listings::ListingProposal> = state
+            .listings
+            .iter()
+            .filter(|l| {
+                matches!(l.status, crate::listings::ListingStatus::Pending)
+                    && l.challenge_deadline_ms <= now_ms
+            })
+            .map(|l| l.value().clone())
+            .collect();
+
+        for p in ready {
+            // Add market to the engine.
+            let market = types::Market {
+                id: MarketId(p.market_id.clone()),
+                base: AssetId::from_str(&p.base),
+                quote: AssetId::from_str(&p.quote),
+                max_orders: p.max_orders,
+                min_order_size: p.min_order_size,
+                price_tick: p.price_tick,
+                quantity_tick: p.quantity_tick,
+                maker_fee_bps: -1,
+                taker_fee_bps: 5,
+            };
+            {
+                let mut engine = state.engine.lock().await;
+                engine.add_market(market.clone());
+            }
+            {
+                let mut us = state.shards.user_state.write().await;
+                us.add_market(market);
+            }
+
+            // Refund bond: locked → available on proposer's USDC.
+            if let Ok(proposer_id) = UserId::from_hex(&p.proposer) {
+                let mut us = state.shards.user_state.write().await;
+                let key = (proposer_id, AssetId::from_str("USDC"));
+                if let Some(bal) = us.balances.get_mut(&key) {
+                    let refund = p.bond_micro.min(bal.locked);
+                    bal.locked -= refund;
+                    bal.available += refund;
+                }
+            }
+
+            // Flip status. Update happens under DashMap's fine-grained lock.
+            if let Some(mut entry) = state.listings.get_mut(&p.listing_id) {
+                entry.status = crate::listings::ListingStatus::Accepted;
+            }
+
+            tracing::info!(
+                "permissionless listing {} auto-accepted: {}",
+                p.listing_id,
+                p.market_id
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

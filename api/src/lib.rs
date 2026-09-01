@@ -7,6 +7,7 @@ pub mod da;
 pub mod feeds;
 pub mod handler;
 pub mod historical;
+pub mod listings;
 pub mod mm;
 pub mod pyth;
 pub mod rate_limit;
@@ -92,6 +93,8 @@ pub struct AppState {
     pub agents: Arc<crate::agents::AgentRegistry>,
     /// Active server-side algo parents (TWAP, etc). Keyed by parent_id.
     pub algos: crate::algos::AlgoRegistry,
+    /// Pending / accepted / rejected permissionless market listings.
+    pub listings: crate::listings::ListingRegistry,
     /// Admin bearer token — read from ADMIN_TOKEN at boot and used in
     /// constant-time comparisons via `AppState::verify_admin_token`.
     admin_token: String,
@@ -257,6 +260,7 @@ impl AppState {
             batch_metrics: Arc::clone(&batch_metrics),
             agents: crate::agents::AgentRegistry::new(),
             algos: std::sync::Arc::new(dashmap::DashMap::new()),
+            listings: std::sync::Arc::new(dashmap::DashMap::new()),
             admin_token,
         });
 
@@ -276,6 +280,7 @@ impl AppState {
         ));
         tokio::spawn(historical::run_export_task(Arc::clone(&state)));
         tokio::spawn(handler::run_fee_tier_task(Arc::clone(&state)));
+        tokio::spawn(handler::run_listing_task(Arc::clone(&state)));
 
         state
     }
