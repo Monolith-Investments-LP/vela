@@ -8,6 +8,7 @@ pub mod agents;
 pub mod algos;
 pub mod anchor;
 pub mod auth;
+pub mod backtest_attest;
 pub mod committee_handler;
 pub mod credit;
 pub mod da;

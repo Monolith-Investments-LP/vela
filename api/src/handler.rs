@@ -305,6 +305,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/strategies/:strategy_id/subscriptions",
             get(crate::strategies::list_subscriptions_handler),
         )
+        .route(
+            "/strategies/backtest/attest",
+            post(crate::backtest_attest::attest_handler),
+        )
         .route("/orders/algo/twap", post(post_twap_algo))
         .route("/orders/algo/cancel", post(cancel_algo))
         .route("/orders/algo/:parent_id", get(get_algo_status))
