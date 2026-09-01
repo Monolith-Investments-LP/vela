@@ -34,11 +34,21 @@ Three targeted changes to reduce metadata-clone overhead on the 98% non-fill pat
 
 | Optimization | Component impact |
 |---|---|
-| `NonceWindow`: `BTreeSet<Nonce>` → `[Nonce; 20]` sorted array | `user_metadata_clone`: 200 ns → 58.2 ns (−71%) |
+| `NonceWindow`: `BTreeSet<Nonce>` → `[Nonce; 20]` fixed ring buffer | `user_metadata_clone`: 200 ns → 58.2 ns (−71%) |
 | `top_depth` computed lazily (only when fills occur) | eliminates `Vec` allocation on every non-fill `match_order` call |
 | `matchable_asks_ref` / `matchable_bids_ref`: iterate by reference | eliminates `Order` clones for matching price levels |
 
+> **Note:** The `NonceWindow` ring-buffer migration and the `matchable_*_ref` zero-allocation
+> path were completed in a subsequent correctness pass (post-2026-05-20).  The component
+> benchmark numbers above reflect the updated code.
+
 ## Results
+
+> **Scope caveat:** The `realistic_mm_workload` figure (0.38 µs / 2.5M ops/sec) measures
+> only `engine.process()` in a single thread.  It excludes network transit, ECDSA signature
+> verification, JSON serialization, the 500 µs batch-dispatch window, WAL I/O, and DA
+> submission.  The representative end-to-end figure is the Tier-2 loopback result:
+> **p50 = 16.9 ms, throughput ≈ 59 ops/sec** (single client, `127.0.0.1`).
 
 Measured 2026-05-20 on Apple M3.
 

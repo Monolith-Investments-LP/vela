@@ -9,6 +9,13 @@
 
 ## Tier 1 — Matching-engine throughput (microbenchmark)
 
+> **Important:** These figures measure only `engine.process()` in a single thread.
+> They exclude network transit, ECDSA signature verification, JSON serialization,
+> the 500 µs batch-dispatch window, WAL I/O, and DA submission.  Do not compare
+> them directly with end-to-end exchange benchmarks.  The representative
+> end-to-end figure is the **Tier-2 loopback result: p50 = 16.9 ms, ≈ 59 ops/sec**
+> (single client, `127.0.0.1` loopback, no real network hop).
+
 Pure in-process matching loop, no HTTP, no auth, no I/O.  Measures only
 the core order-book data structure.
 

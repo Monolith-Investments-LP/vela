@@ -125,7 +125,7 @@ All live at [vela.monolithsystematic.com/transparency](https://vela.monolithsyst
 **Adverse Selection Toxicity Scoring:**
 - Every taker fill scored in [0.0, 1.0] on the hot path: fixed-size ring buffer OFI accumulator, book-walk depth, and order size relative to quoted liquidity
 - Score emitted per fill on the authenticated `ws://.../feed/toxicity` WebSocket channel
-- Zero allocations on the matching path; estimated overhead <50 ns at p50
+- Minimized allocations on the matching path via reference-based level iteration (`matchable_*_ref`); estimated hot-path overhead <50 ns at p50
 
 **Data layer:**
 - Depth-32 sparse Merkle tree with O(dirty×32) root recompute
