@@ -211,6 +211,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/metrics", get(metrics_handler))
         .route("/openapi.json", get(crate::openapi::openapi_handler))
         .route("/docs", get(crate::openapi::docs_handler))
+        .route("/mcp", post(crate::mcp::handle_rpc))
         .route("/status", get(status_handler))
         .route("/fees/public", get(fees_public_handler))
         .route("/fees/schedule", get(fees_schedule_handler))

@@ -12,6 +12,7 @@ pub mod feeds;
 pub mod handler;
 pub mod historical;
 pub mod listings;
+pub mod mcp;
 pub mod mm;
 pub mod openapi;
 pub mod pyth;
