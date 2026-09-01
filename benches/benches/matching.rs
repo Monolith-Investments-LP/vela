@@ -292,6 +292,8 @@ impl SimState {
                                 nonce,
                                 client_order_id: None,
                                 signature: vec![0u8; 65],
+                                stp: Default::default(),
+                                min_quantity: None,
                             }),
                             ts,
                         );
@@ -361,6 +363,8 @@ impl SimState {
                 nonce,
                 client_order_id: None,
                 signature: vec![0u8; 65],
+                stp: Default::default(),
+                min_quantity: None,
             }),
         )
     }
@@ -417,6 +421,8 @@ impl SimState {
             nonce,
             client_order_id: None,
             signature: vec![0u8; 65],
+            stp: Default::default(),
+            min_quantity: None,
         })
     }
 }
@@ -1241,6 +1247,8 @@ fn build_deep_sim(target_levels_per_side: usize) -> SimState {
                         nonce,
                         client_order_id: None,
                         signature: vec![0u8; 65],
+                        stp: Default::default(),
+                        min_quantity: None,
                     }),
                     ts,
                 );

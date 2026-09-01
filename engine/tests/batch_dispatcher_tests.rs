@@ -79,6 +79,8 @@ fn bid_request(price: u64, nonce: u64) -> Request {
         nonce,
         client_order_id: None,
         signature: vec![0u8; 65],
+        stp: Default::default(),
+        min_quantity: None,
     })
 }
 

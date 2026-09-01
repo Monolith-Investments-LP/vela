@@ -258,6 +258,33 @@ pub enum OrderType {
     FillOrKill,
 }
 
+/// Behavior when an incoming taker order would match against a resting
+/// order posted by the same user.
+///
+/// Default is `None`, which preserves the historical behavior (silently
+/// skip the self-match and continue). Configurable per-order so a
+/// market-making desk can pick the policy that matches its compliance
+/// or strategy requirements.
+///
+/// `CancelTaker` and `CancelBoth` short-circuit matching entirely and
+/// leave the taker order marked `OrderStatus::Canceled`. `CancelMaker`
+/// removes the resting order and lets the taker continue matching
+/// against the next order at that level or the next price level.
+/// `DecrementAndCancel` cancels whichever order has the smaller
+/// remaining quantity and decrements the other; if both remaining are
+/// equal it cancels both (v1: when the taker is strictly smaller than
+/// the maker we cancel both to avoid a fill-less partial-decrement of
+/// the maker, which downstream systems don't yet model).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SelfTradePreventionMode {
+    #[default]
+    None,
+    CancelTaker,
+    CancelMaker,
+    CancelBoth,
+    DecrementAndCancel,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderStatus {
     Open,
@@ -281,6 +308,15 @@ pub struct Order {
     pub client_order_id: Option<String>,
     pub timestamp: Timestamp,
     pub status: OrderStatus,
+    /// Self-trade prevention policy for this order. Defaults to `None`
+    /// (skip self-matches silently) for wire back-compat.
+    #[serde(default)]
+    pub stp: SelfTradePreventionMode,
+    /// If set, the total filled quantity across the initial dispatch
+    /// must be at least this large or the order is rejected atomically
+    /// (all delta writes rolled back).
+    #[serde(default)]
+    pub min_quantity: Option<Quantity>,
 }
 
 impl Order {
@@ -590,6 +626,10 @@ pub struct PostOrderRequest {
     pub nonce: Nonce,
     pub client_order_id: Option<String>,
     pub signature: Vec<u8>,
+    #[serde(default)]
+    pub stp: SelfTradePreventionMode,
+    #[serde(default)]
+    pub min_quantity: Option<Quantity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -716,6 +756,12 @@ pub enum ErrorCode {
     InvalidQuantity,
     DuplicateClientOrderId,
     InvalidClientOrderId,
+    /// A `SelfTradePreventionMode::CancelTaker` or `CancelBoth` policy
+    /// short-circuited the incoming order.
+    StpTakerCanceled,
+    /// `min_quantity` was set on the order and the total filled quantity
+    /// across the initial dispatch did not meet the threshold.
+    MinQuantityNotMet,
     InternalError,
 }
 
@@ -745,6 +791,10 @@ pub enum VelaError {
     DuplicateClientOrderId,
     #[error("invalid client order id")]
     InvalidClientOrderId,
+    #[error("self-trade prevention canceled the taker order")]
+    StpTakerCanceled,
+    #[error("min_quantity not met: filled {filled}, minimum {min}")]
+    MinQuantityNotMet { filled: u64, min: u64 },
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -780,6 +830,8 @@ impl From<VelaError> for ErrorResponse {
             VelaError::InvalidSignature => ErrorCode::InvalidSignature,
             VelaError::DuplicateClientOrderId => ErrorCode::DuplicateClientOrderId,
             VelaError::InvalidClientOrderId => ErrorCode::InvalidClientOrderId,
+            VelaError::StpTakerCanceled => ErrorCode::StpTakerCanceled,
+            VelaError::MinQuantityNotMet { .. } => ErrorCode::MinQuantityNotMet,
             VelaError::InvalidAddress | VelaError::Internal(_) => ErrorCode::InternalError,
         };
         ErrorResponse {

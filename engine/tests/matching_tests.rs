@@ -60,6 +60,8 @@ fn post_bid(user: UserId, price: u64, qty: u64, nonce: u64) -> Request {
         nonce,
         client_order_id: None,
         signature: vec![0u8; 65],
+        stp: Default::default(),
+        min_quantity: None,
     })
 }
 
@@ -74,6 +76,8 @@ fn post_ask(user: UserId, price: u64, qty: u64, nonce: u64) -> Request {
         nonce,
         client_order_id: None,
         signature: vec![0u8; 65],
+        stp: Default::default(),
+        min_quantity: None,
     })
 }
 
@@ -88,6 +92,8 @@ fn post_ioc_bid(user: UserId, price: u64, qty: u64, nonce: u64) -> Request {
         nonce,
         client_order_id: None,
         signature: vec![0u8; 65],
+        stp: Default::default(),
+        min_quantity: None,
     })
 }
 
@@ -102,6 +108,8 @@ fn post_fok_bid(user: UserId, price: u64, qty: u64, nonce: u64) -> Request {
         nonce,
         client_order_id: None,
         signature: vec![0u8; 65],
+        stp: Default::default(),
+        min_quantity: None,
     })
 }
 
@@ -594,6 +602,8 @@ fn test_fill_triggers_auto_cancel_when_ratio_breached() {
             nonce: 1,
             client_order_id: None,
             signature: vec![0u8; 65],
+            stp: Default::default(),
+            min_quantity: None,
         }),
         5,
     );
@@ -686,6 +696,8 @@ fn test_asset_backing_invariant_holds() {
             nonce: 1,
             client_order_id: None,
             signature: vec![0u8; 65],
+            stp: Default::default(),
+            min_quantity: None,
         }),
         5,
     );
@@ -1191,6 +1203,8 @@ fn post_bid_with_coid(
         nonce,
         client_order_id: coid.map(|s| s.to_string()),
         signature: vec![0u8; 65],
+        stp: Default::default(),
+        min_quantity: None,
     })
 }
 
@@ -1379,6 +1393,8 @@ fn test_coid_fill_removes_mapping() {
             nonce: 1,
             client_order_id: Some("maker-ask-1".to_string()),
             signature: vec![0u8; 65],
+            stp: Default::default(),
+            min_quantity: None,
         }),
         3,
     );
@@ -1662,6 +1678,8 @@ fn test_credit_breach_auto_cancel_rolled_back_on_order_failure() {
             nonce: 2,
             client_order_id: None,
             signature: vec![0u8; 65],
+            stp: Default::default(),
+            min_quantity: None,
         }),
         3,
     );
@@ -2127,4 +2145,329 @@ fn test_negative_net_fee_handled_gracefully() {
         fee_balance, 0,
         "fee_balances saturates at 0 on negative net fee"
     );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Self-trade prevention (STP) + min_quantity tests.
+// Added when STP + min_quantity shipped (Tier 1 buildplan).
+// ────────────────────────────────────────────────────────────────────────────
+
+use types::SelfTradePreventionMode;
+
+fn post_bid_stp(
+    user: UserId,
+    price: u64,
+    qty: u64,
+    nonce: u64,
+    stp: SelfTradePreventionMode,
+) -> Request {
+    Request::PostOrder(PostOrderRequest {
+        user,
+        market: btc_usdc(),
+        side: OrderSide::Bid,
+        order_type: OrderType::GoodTillCanceled,
+        price: price * PRICE_SCALE,
+        quantity: qty * QUANTITY_SCALE,
+        nonce,
+        client_order_id: None,
+        signature: vec![0u8; 65],
+        stp,
+        min_quantity: None,
+    })
+}
+
+fn post_ask_stp(
+    user: UserId,
+    price: u64,
+    qty: u64,
+    nonce: u64,
+    stp: SelfTradePreventionMode,
+) -> Request {
+    Request::PostOrder(PostOrderRequest {
+        user,
+        market: btc_usdc(),
+        side: OrderSide::Ask,
+        order_type: OrderType::GoodTillCanceled,
+        price: price * PRICE_SCALE,
+        quantity: qty * QUANTITY_SCALE,
+        nonce,
+        client_order_id: None,
+        signature: vec![0u8; 65],
+        stp,
+        min_quantity: None,
+    })
+}
+
+fn count_fills(responses: &[Response]) -> usize {
+    responses
+        .iter()
+        .filter(|r| matches!(r, Response::OrderFilled(_)))
+        .count()
+}
+
+fn count_cancels(responses: &[Response]) -> usize {
+    responses
+        .iter()
+        .filter(|r| matches!(r, Response::OrderCanceled(_)))
+        .count()
+}
+
+fn posted_status(responses: &[Response]) -> Option<OrderStatus> {
+    responses.iter().find_map(|r| {
+        if let Response::OrderPosted(p) = r {
+            Some(p.status)
+        } else {
+            None
+        }
+    })
+}
+
+/// Baseline: without STP (None), a self-match is silently skipped
+/// (historical behavior). The taker doesn't fill against its own resting
+/// order but the resting order stays on the book.
+#[test]
+fn test_stp_none_skips_self_match_silently() {
+    let mut e = engine();
+    let u = user(1);
+    // Deposit both sides.
+    e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
+    e.process(deposit(u.clone(), btc(), 5 * QUANTITY_SCALE), 2);
+
+    // Post own ask at 100.
+    e.process(post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None), 3);
+    // Try to lift own ask with a bid at 100. STP=None should silently skip.
+    let responses = e.process(post_bid_stp(u.clone(), 100, 1, 2, SelfTradePreventionMode::None), 4);
+
+    assert_eq!(count_fills(&responses), 0, "no fills against self");
+    // The bid should rest since nothing else was on the book.
+    assert_eq!(posted_status(&responses), Some(OrderStatus::Open));
+}
+
+/// CancelTaker: the incoming order is canceled with zero fills; the resting
+/// order stays untouched.
+#[test]
+fn test_stp_cancel_taker_zeros_incoming() {
+    let mut e = engine();
+    let u = user(1);
+    e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
+    e.process(deposit(u.clone(), btc(), 5 * QUANTITY_SCALE), 2);
+
+    e.process(post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None), 3);
+    let responses = e.process(
+        post_bid_stp(u.clone(), 100, 1, 2, SelfTradePreventionMode::CancelTaker),
+        4,
+    );
+
+    assert_eq!(count_fills(&responses), 0);
+    assert_eq!(count_cancels(&responses), 0, "resting maker is untouched");
+    assert_eq!(posted_status(&responses), Some(OrderStatus::Canceled));
+}
+
+/// CancelMaker: the resting order gets canceled; the taker continues to the
+/// next order. Here there's no next order so the taker rests.
+#[test]
+fn test_stp_cancel_maker_removes_resting() {
+    let mut e = engine();
+    let u = user(1);
+    e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
+    e.process(deposit(u.clone(), btc(), 5 * QUANTITY_SCALE), 2);
+
+    e.process(post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None), 3);
+    let responses = e.process(
+        post_bid_stp(u.clone(), 100, 1, 2, SelfTradePreventionMode::CancelMaker),
+        4,
+    );
+
+    assert_eq!(count_fills(&responses), 0);
+    assert_eq!(count_cancels(&responses), 1, "resting maker canceled");
+    // Taker rests since there's nothing else to match against.
+    assert_eq!(posted_status(&responses), Some(OrderStatus::Open));
+}
+
+/// CancelBoth: resting canceled, taker canceled.
+#[test]
+fn test_stp_cancel_both() {
+    let mut e = engine();
+    let u = user(1);
+    e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
+    e.process(deposit(u.clone(), btc(), 5 * QUANTITY_SCALE), 2);
+
+    e.process(post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None), 3);
+    let responses = e.process(
+        post_bid_stp(u.clone(), 100, 1, 2, SelfTradePreventionMode::CancelBoth),
+        4,
+    );
+
+    assert_eq!(count_fills(&responses), 0);
+    assert_eq!(count_cancels(&responses), 1, "resting maker canceled");
+    assert_eq!(posted_status(&responses), Some(OrderStatus::Canceled));
+}
+
+/// DecrementAndCancel where taker >= maker: cancel maker in full, taker
+/// continues with the leftover.
+#[test]
+fn test_stp_decrement_and_cancel_taker_larger() {
+    let mut e = engine();
+    let u = user(1);
+    e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
+    e.process(deposit(u.clone(), btc(), 5 * QUANTITY_SCALE), 2);
+
+    // Maker asks 1 BTC @ 100.
+    e.process(post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None), 3);
+    // Taker bids 3 BTC @ 100. Should cancel maker, taker rests with 2 BTC
+    // remaining (no other counterparty).
+    let responses = e.process(
+        post_bid_stp(u.clone(), 100, 3, 2, SelfTradePreventionMode::DecrementAndCancel),
+        4,
+    );
+
+    assert_eq!(count_fills(&responses), 0, "no fill happens under DAC");
+    assert_eq!(count_cancels(&responses), 1, "maker canceled");
+    // Taker rests because remaining quantity > 0 and order type is GTC.
+    assert_eq!(posted_status(&responses), Some(OrderStatus::Open));
+}
+
+/// DecrementAndCancel where taker < maker (v1: cancel both, per doc).
+#[test]
+fn test_stp_decrement_and_cancel_taker_smaller_cancels_both() {
+    let mut e = engine();
+    let u = user(1);
+    e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
+    e.process(deposit(u.clone(), btc(), 5 * QUANTITY_SCALE), 2);
+
+    // Maker asks 3 BTC @ 100.
+    e.process(post_ask_stp(u.clone(), 100, 3, 1, SelfTradePreventionMode::None), 3);
+    // Taker bids 1 BTC. v1 policy: cancel both.
+    let responses = e.process(
+        post_bid_stp(u.clone(), 100, 1, 2, SelfTradePreventionMode::DecrementAndCancel),
+        4,
+    );
+
+    assert_eq!(count_fills(&responses), 0);
+    assert_eq!(count_cancels(&responses), 1);
+    assert_eq!(posted_status(&responses), Some(OrderStatus::Canceled));
+}
+
+/// STP does not block matches against OTHER users.
+#[test]
+fn test_stp_does_not_affect_other_users() {
+    let mut e = engine();
+    let maker = user(1);
+    let taker = user(2);
+    e.process(deposit(maker.clone(), btc(), 5 * QUANTITY_SCALE), 1);
+    e.process(deposit(taker.clone(), usdc(), 100_000 * PRICE_SCALE), 2);
+
+    e.process(post_ask_stp(maker, 100, 1, 1, SelfTradePreventionMode::None), 3);
+    let responses = e.process(
+        post_bid_stp(taker, 100, 1, 1, SelfTradePreventionMode::CancelTaker),
+        4,
+    );
+
+    assert_eq!(count_fills(&responses), 1, "matches against other user still fill");
+    assert_eq!(posted_status(&responses), Some(OrderStatus::Filled));
+}
+
+/// min_quantity: order rejects atomically if total filled falls short.
+#[test]
+fn test_min_quantity_rejects_under_threshold() {
+    let mut e = engine();
+    let maker = user(1);
+    let taker = user(2);
+
+    e.process(deposit(maker.clone(), btc(), 5 * QUANTITY_SCALE), 1);
+    e.process(deposit(taker.clone(), usdc(), 1_000_000 * PRICE_SCALE), 2);
+
+    // Only 1 BTC available at 100.
+    e.process(post_ask_stp(maker.clone(), 100, 1, 1, SelfTradePreventionMode::None), 3);
+
+    // Taker wants 5 BTC with min_quantity=3. Only 1 available → reject.
+    let req = Request::PostOrder(PostOrderRequest {
+        user: taker.clone(),
+        market: btc_usdc(),
+        side: OrderSide::Bid,
+        order_type: OrderType::ImmediateOrCancel,
+        price: 100 * PRICE_SCALE,
+        quantity: 5 * QUANTITY_SCALE,
+        nonce: 1,
+        client_order_id: None,
+        signature: vec![0u8; 65],
+        stp: SelfTradePreventionMode::None,
+        min_quantity: Some(3 * QUANTITY_SCALE),
+    });
+
+    let responses = e.process(req, 4);
+
+    // The error path returns a single Error response.
+    let err = responses.iter().find_map(|r| {
+        if let Response::Error(e) = r {
+            Some(e.code)
+        } else {
+            None
+        }
+    });
+    assert_eq!(err, Some(ErrorCode::MinQuantityNotMet));
+
+    // Atomicity: the maker's resting ask is still there (nothing was consumed).
+    e.process(post_ask_stp(maker.clone(), 101, 1, 2, SelfTradePreventionMode::None), 5);
+    // If the previous rejected order had partially filled, this cheap sanity check
+    // (posting a second ask) would still work regardless. The stronger check is that
+    // taker's USDC balance was not debited — checked via a second small IOC below.
+    let req_small = Request::PostOrder(PostOrderRequest {
+        user: taker,
+        market: btc_usdc(),
+        side: OrderSide::Bid,
+        order_type: OrderType::ImmediateOrCancel,
+        price: 100 * PRICE_SCALE,
+        quantity: 1 * QUANTITY_SCALE,
+        nonce: 2,
+        client_order_id: None,
+        signature: vec![0u8; 65],
+        stp: SelfTradePreventionMode::None,
+        min_quantity: None,
+    });
+    let r2 = e.process(req_small, 6);
+    assert_eq!(count_fills(&r2), 1, "taker balance was not debited by rejected order");
+}
+
+/// min_quantity: order fills when threshold is met.
+#[test]
+fn test_min_quantity_accepts_when_met() {
+    let mut e = engine();
+    let maker = user(1);
+    let taker = user(2);
+
+    e.process(deposit(maker.clone(), btc(), 5 * QUANTITY_SCALE), 1);
+    e.process(deposit(taker.clone(), usdc(), 1_000_000 * PRICE_SCALE), 2);
+
+    e.process(post_ask_stp(maker.clone(), 100, 3, 1, SelfTradePreventionMode::None), 3);
+
+    // Taker wants 5 BTC with min_quantity=2. 3 available → accept, fills 3.
+    let req = Request::PostOrder(PostOrderRequest {
+        user: taker,
+        market: btc_usdc(),
+        side: OrderSide::Bid,
+        order_type: OrderType::ImmediateOrCancel,
+        price: 100 * PRICE_SCALE,
+        quantity: 5 * QUANTITY_SCALE,
+        nonce: 1,
+        client_order_id: None,
+        signature: vec![0u8; 65],
+        stp: SelfTradePreventionMode::None,
+        min_quantity: Some(2 * QUANTITY_SCALE),
+    });
+    let responses = e.process(req, 4);
+
+    assert_eq!(count_fills(&responses), 1);
+    // IOC + partial fill → status Canceled with 3/5 filled.
+    let filled_qty: u64 = responses
+        .iter()
+        .filter_map(|r| {
+            if let Response::OrderFilled(f) = r {
+                Some(f.quantity)
+            } else {
+                None
+            }
+        })
+        .sum();
+    assert_eq!(filled_qty, 3 * QUANTITY_SCALE);
 }

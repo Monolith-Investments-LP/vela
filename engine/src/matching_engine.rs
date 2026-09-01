@@ -9,8 +9,8 @@ use std::sync::Arc;
 use types::{
     AssetId, Balance, CancelOrderRequest, DepositRequest, ErrorCode, ErrorResponse, FeeConfig,
     Fill, Market, MarketId, Order, OrderCanceledResponse, OrderId, OrderPostedResponse, OrderSide,
-    OrderStatus, OrderType, PostOrderRequest, Request, Response, Timestamp, UserId, UserMetadata,
-    VelaError, WithdrawalRequest,
+    OrderStatus, OrderType, PostOrderRequest, Request, Response, SelfTradePreventionMode,
+    Timestamp, UserId, UserMetadata, VelaError, WithdrawalRequest,
 };
 
 type ExpiryCandidate = (
@@ -305,12 +305,45 @@ impl MatchingEngine {
             client_order_id: req.client_order_id.clone(),
             timestamp: self.timestamp,
             status: OrderStatus::Open,
+            stp: req.stp,
+            min_quantity: req.min_quantity,
         };
 
-        let (fills, auto_canceled) = self.match_order(&order, market, delta)?;
+        let (fills, auto_canceled, taker_canceled_by_stp) =
+            self.match_order(&order, market, delta)?;
 
         let total_filled: u64 = fills.iter().map(|f| f.quantity).sum();
         order.filled_quantity = total_filled;
+
+        // STP short-circuit: taker is canceled, any maker cancels from STP
+        // remain committed. Skip FOK, min_quantity, and resting logic.
+        if taker_canceled_by_stp {
+            order.status = OrderStatus::Canceled;
+            delta.set_metadata(meta);
+            let mut responses: Vec<Response> = room_cancels;
+            responses.extend(fills.into_iter().map(Response::OrderFilled));
+            for canceled in auto_canceled {
+                responses.push(Response::OrderCanceled(canceled));
+            }
+            responses.push(Response::OrderPosted(OrderPostedResponse {
+                order_id: order.id,
+                client_order_id: order.client_order_id,
+                status: order.status,
+            }));
+            return Ok(responses);
+        }
+
+        // min_quantity check runs before FOK so callers get a specific
+        // error code. FOK is stricter and would fire for the same input;
+        // either error triggers a full rollback of the delta.
+        if let Some(min) = req.min_quantity {
+            if total_filled < min {
+                return Err(VelaError::MinQuantityNotMet {
+                    filled: total_filled,
+                    min,
+                });
+            }
+        }
 
         if req.order_type == OrderType::FillOrKill && total_filled < req.quantity {
             return Err(VelaError::FokNotFilled);
@@ -366,18 +399,26 @@ impl MatchingEngine {
         Ok(responses)
     }
 
+    /// Result of the match loop.
+    ///
+    /// `taker_canceled_by_stp` is set when the incoming order's STP policy
+    /// short-circuits matching (CancelTaker, CancelBoth, or the taker-side
+    /// branch of DecrementAndCancel). Callers must skip the FOK check,
+    /// the `min_quantity` check, and any resting behavior in that case;
+    /// the order becomes `OrderStatus::Canceled` and any STP-triggered
+    /// maker cancels in `auto_canceled` remain committed.
     fn match_order(
         &self,
         order: &Order,
         market: &Market,
         delta: &mut DeltaBuffer,
-    ) -> Result<(Vec<Fill>, Vec<OrderCanceledResponse>), VelaError> {
+    ) -> Result<(Vec<Fill>, Vec<OrderCanceledResponse>, bool), VelaError> {
         let meta_base: &EngineMap<UserId, UserMetadata> =
             self.snapshot_metadata.as_deref().unwrap_or(&self.metadata);
 
         let book = match self.order_books.get(&order.market) {
             Some(b) => b,
-            None => return Ok((vec![], vec![])),
+            None => return Ok((vec![], vec![], false)),
         };
 
         // Capture best opposing level depth at arrival time for the size-fraction component.
@@ -393,6 +434,12 @@ impl MatchingEngine {
         // Count distinct price levels that actually produced fills (no allocation).
         let mut levels_with_fills: u32 = 0;
 
+        // STP-triggered maker cancels accumulate here and are folded into
+        // `auto_canceled` at the end of the function so they compose with
+        // the credit-breach auto-cancels for asks.
+        let mut stp_cancels: Vec<OrderCanceledResponse> = vec![];
+        let mut taker_canceled_by_stp = false;
+
         let matchable_iter: Box<dyn Iterator<Item = (u64, &std::collections::VecDeque<Order>)>> =
             match order.side {
                 OrderSide::Bid => Box::new(book.matchable_asks_ref(order.price)),
@@ -405,15 +452,73 @@ impl MatchingEngine {
                 if taker_remaining == 0 {
                     break 'outer;
                 }
-                if resting.user == order.user {
-                    continue;
-                }
 
                 let consumed = locally_consumed.get(&resting.id).copied().unwrap_or(0);
                 let remaining_at_start = resting.remaining_quantity();
                 let resting_remaining = remaining_at_start.saturating_sub(consumed);
                 if resting_remaining == 0 {
                     continue;
+                }
+
+                if resting.user == order.user {
+                    match order.stp {
+                        SelfTradePreventionMode::None => {
+                            // Historical default: silently skip the self-match.
+                            continue;
+                        }
+                        SelfTradePreventionMode::CancelTaker => {
+                            taker_canceled_by_stp = true;
+                            break 'outer;
+                        }
+                        SelfTradePreventionMode::CancelMaker => {
+                            self.cancel_maker_no_fill(
+                                resting,
+                                market,
+                                delta,
+                                meta_base,
+                                &mut stp_cancels,
+                            );
+                            continue;
+                        }
+                        SelfTradePreventionMode::CancelBoth => {
+                            self.cancel_maker_no_fill(
+                                resting,
+                                market,
+                                delta,
+                                meta_base,
+                                &mut stp_cancels,
+                            );
+                            taker_canceled_by_stp = true;
+                            break 'outer;
+                        }
+                        SelfTradePreventionMode::DecrementAndCancel => {
+                            if taker_remaining >= resting_remaining {
+                                // Taker >= maker: cancel maker, decrement taker.
+                                self.cancel_maker_no_fill(
+                                    resting,
+                                    market,
+                                    delta,
+                                    meta_base,
+                                    &mut stp_cancels,
+                                );
+                                taker_remaining -= resting_remaining;
+                                continue;
+                            } else {
+                                // Taker strictly smaller. v1: cancel both
+                                // rather than partial-decrement the maker,
+                                // which downstream systems don't yet model.
+                                self.cancel_maker_no_fill(
+                                    resting,
+                                    market,
+                                    delta,
+                                    meta_base,
+                                    &mut stp_cancels,
+                                );
+                                taker_canceled_by_stp = true;
+                                break 'outer;
+                            }
+                        }
+                    }
                 }
 
                 let fill_qty = taker_remaining.min(resting_remaining);
@@ -576,7 +681,56 @@ impl MatchingEngine {
             }
         }
 
-        Ok((fills, auto_canceled))
+        // Fold STP-triggered maker cancels into the caller-visible list.
+        // STP cancels always survive; they only get rolled back if the
+        // whole `try_post_order` fails (e.g., FOK not filled), which is
+        // the correct atomicity contract.
+        auto_canceled.extend(stp_cancels);
+
+        Ok((fills, auto_canceled, taker_canceled_by_stp))
+    }
+
+    /// Cancel a resting maker order without producing a fill.
+    ///
+    /// Used by the STP paths (`CancelMaker`, `CancelBoth`, and the
+    /// maker-cancel branch of `DecrementAndCancel`). Removes the order
+    /// from the book, unlocks the maker's locked-side balance back to
+    /// available, and cleans up the maker's metadata (order-id list,
+    /// quoted notional, and `actual_collateral` for the bid side).
+    fn cancel_maker_no_fill(
+        &self,
+        resting: &Order,
+        market: &Market,
+        delta: &mut DeltaBuffer,
+        meta_base: &EngineMap<UserId, UserMetadata>,
+        cancels: &mut Vec<OrderCanceledResponse>,
+    ) {
+        let bal_base: &EngineMap<(UserId, AssetId), Balance> =
+            self.snapshot_balances.as_deref().unwrap_or(&self.balances);
+
+        let remaining = resting.remaining_quantity();
+        let notional = CreditSystem::compute_notional(resting.price, remaining);
+        let (unlock_asset, unlock_amt) = match resting.side {
+            OrderSide::Bid => (market.quote, notional),
+            OrderSide::Ask => (market.base, remaining),
+        };
+
+        delta.record_remove(resting.market.clone(), resting.id);
+        delta.unlock_to_available(&resting.user, &unlock_asset, unlock_amt, bal_base);
+
+        let mut maker_meta = delta.get_metadata(&resting.user, meta_base);
+        maker_meta.remove_order_id(resting.id);
+        maker_meta.total_quoted_notional =
+            maker_meta.total_quoted_notional.saturating_sub(notional);
+        if resting.side == OrderSide::Bid {
+            maker_meta.actual_collateral = maker_meta.actual_collateral.saturating_sub(unlock_amt);
+        }
+        delta.set_metadata(maker_meta);
+
+        cancels.push(OrderCanceledResponse {
+            order_id: resting.id,
+            client_order_id: resting.client_order_id.clone(),
+        });
     }
 
     fn apply_fill_balances(&self, fill: &Fill, market: &Market, delta: &mut DeltaBuffer) {

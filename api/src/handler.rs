@@ -706,6 +706,8 @@ async fn post_order(
         nonce: body.nonce,
         client_order_id: body.client_order_id.clone(),
         signature: vec![],
+        stp: Default::default(),
+        min_quantity: None,
     };
 
     let ts = std::time::SystemTime::now()

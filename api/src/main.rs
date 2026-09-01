@@ -134,6 +134,8 @@ fn seed_order_books(engine: &mut MatchingEngine) {
                     nonce,
                     client_order_id: None,
                     signature: vec![],
+                    stp: Default::default(),
+                    min_quantity: None,
                 }),
                 0,
             );
@@ -155,6 +157,8 @@ fn seed_order_books(engine: &mut MatchingEngine) {
                     nonce,
                     client_order_id: None,
                     signature: vec![],
+                    stp: Default::default(),
+                    min_quantity: None,
                 }),
                 0,
             );

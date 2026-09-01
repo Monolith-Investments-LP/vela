@@ -73,6 +73,8 @@ fn post_req(
         nonce,
         client_order_id: None,
         signature: vec![],
+        stp: Default::default(),
+        min_quantity: None,
     })
 }
 

@@ -260,6 +260,8 @@ mod tests {
             nonce: 42,
             client_order_id: None,
             signature: vec![0u8; 65],
+            stp: Default::default(),
+            min_quantity: None,
         }
     }
 

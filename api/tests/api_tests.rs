@@ -216,6 +216,8 @@ async fn test_get_order_by_client_id_found() {
             nonce: 42,
             client_order_id: Some("test-coid-api".to_string()),
             signature: vec![0u8; 65],
+            stp: Default::default(),
+            min_quantity: None,
         }),
         2,
     );
