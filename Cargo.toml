@@ -45,3 +45,26 @@ hex = "0.4"
 rand = "0.8"
 criterion = { version = "0.5", features = ["html_reports"] }
 ahash = { version = "0.8", features = ["serde"] }
+
+[profile.release]
+# Fat LTO across the workspace: matching engine spans multiple crates
+# (types → engine → api) and cross-crate inlining materially cuts
+# hot-path instruction count.
+lto = "fat"
+# Single codegen unit gives LLVM the whole compilation unit to optimise,
+# at the cost of longer release builds. Worth it for a matching engine.
+codegen-units = 1
+# `panic = "abort"` shaves unwind tables + panic-machinery from the
+# binary and lets LLVM emit smaller code around every fallible call.
+# The engine treats unrecoverable state as fatal (WAL + snapshot handle
+# recovery), so unwinding wasn't buying anything in prod.
+panic = "abort"
+# Debug symbols stripped from the shipped binary — snapshotable via
+# `strip = "symbols"`. Keep `debug = 1` if you want addr2line-usable
+# frames from prod core dumps.
+strip = "symbols"
+
+[profile.bench]
+# Match release settings so bench numbers reflect production behaviour.
+lto = "fat"
+codegen-units = 1

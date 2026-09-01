@@ -1,5 +1,11 @@
 use std::sync::Arc;
 use engine::MatchingEngine;
+
+// mimalloc allocator: measurably faster than the platform default on the
+// matching engine's HashMap-heavy allocation pattern. Global; no runtime
+// configuration required.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use types::{
     AssetId, DepositRequest, FeeConfig, Market, MarketId, OrderSide, OrderType, PostOrderRequest,
     Request, UserId,
