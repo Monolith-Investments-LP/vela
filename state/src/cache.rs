@@ -29,7 +29,8 @@ impl StateCache {
 
     pub fn set_balance(&mut self, balance: &Balance) {
         let key = StateKey::Balance { user: balance.user.clone(), asset: balance.asset };
-        let val = serde_json::to_vec(balance).unwrap_or_default();
+        let val = serde_json::to_vec(balance)
+            .expect("Balance serialization must not fail: all fields are serializable");
         self.raw_set(key, val);
     }
 
@@ -41,7 +42,8 @@ impl StateCache {
 
     pub fn set_metadata(&mut self, meta: &UserMetadata) {
         let key = StateKey::Metadata { user: meta.user.clone() };
-        let val = serde_json::to_vec(meta).unwrap_or_default();
+        let val = serde_json::to_vec(meta)
+            .expect("UserMetadata serialization must not fail: all fields are serializable");
         self.raw_set(key, val);
     }
 
@@ -53,7 +55,8 @@ impl StateCache {
 
     pub fn set_market(&mut self, market: &Market) {
         let key = StateKey::MarketConfig { market: market.id.clone() };
-        let val = serde_json::to_vec(market).unwrap_or_default();
+        let val = serde_json::to_vec(market)
+            .expect("Market serialization must not fail: all fields are serializable");
         self.raw_set(key, val);
     }
 
