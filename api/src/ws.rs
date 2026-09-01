@@ -33,22 +33,33 @@ pub async fn run_background_task(state: Arc<AppState>) {
         markets_counter += 1;
         let ts = now_ms();
 
-        type BookEntry = (String, Vec<[String; 2]>, Vec<[String; 2]>);
-        let book_data: Vec<BookEntry> = {
+        // Copy raw price/qty pairs under the lock; release before serialization.
+        type RawLevel = (u64, u64);
+        type RawBookEntry = (String, Vec<RawLevel>, Vec<RawLevel>);
+        let raw_book_data: Vec<RawBookEntry> = {
             let engine = state.engine.lock().await;
             engine.markets.keys()
                 .filter_map(|market_id| {
                     let book = engine.order_books.get(market_id)?;
-                    let bids = book.depth_bids(50).iter()
-                        .map(|(p, q)| [format_amount(*p, PRICE_DECIMALS), format_amount(*q, QUANTITY_DECIMALS)])
-                        .collect();
-                    let asks = book.depth_asks(50).iter()
-                        .map(|(p, q)| [format_amount(*p, PRICE_DECIMALS), format_amount(*q, QUANTITY_DECIMALS)])
-                        .collect();
+                    let bids = book.depth_bids(50);
+                    let asks = book.depth_asks(50);
                     Some((market_id.0.clone(), bids, asks))
                 })
                 .collect()
         };
+        // Lock released — serialize outside.
+        type BookEntry = (String, Vec<[String; 2]>, Vec<[String; 2]>);
+        let book_data: Vec<BookEntry> = raw_book_data.into_iter()
+            .map(|(market_id, bids_raw, asks_raw)| {
+                let bids = bids_raw.iter()
+                    .map(|(p, q)| [format_amount(*p, PRICE_DECIMALS), format_amount(*q, QUANTITY_DECIMALS)])
+                    .collect();
+                let asks = asks_raw.iter()
+                    .map(|(p, q)| [format_amount(*p, PRICE_DECIMALS), format_amount(*q, QUANTITY_DECIMALS)])
+                    .collect();
+                (market_id, bids, asks)
+            })
+            .collect();
 
         for (market_id, bids, asks) in book_data {
             let channel = format!("orderbook:{}", market_id);
@@ -64,20 +75,33 @@ pub async fn run_background_task(state: Arc<AppState>) {
         }
 
         if markets_counter.is_multiple_of(5) {
-            let summaries: Vec<serde_json::Value> = {
+            // Copy raw market summary data under the lock; release before JSON serialization.
+            type RawSummary = (String, String, String, Option<u64>, Option<u64>, Option<u64>);
+            let raw_summaries: Vec<RawSummary> = {
                 let engine = state.engine.lock().await;
                 engine.markets.values().map(|m| {
                     let book = engine.order_books.get(&m.id);
-                    serde_json::json!({
-                        "id": m.id.0,
-                        "base": m.base.as_str(),
-                        "quote": m.quote.as_str(),
-                        "best_bid": book.and_then(|b| b.best_bid()).map(|p| format_amount(p, PRICE_DECIMALS)),
-                        "best_ask": book.and_then(|b| b.best_ask()).map(|p| format_amount(p, PRICE_DECIMALS)),
-                        "spread": book.and_then(|b| b.spread()).map(|s| format_amount(s, PRICE_DECIMALS)),
-                    })
+                    (
+                        m.id.0.clone(),
+                        m.base.as_str().to_string(),
+                        m.quote.as_str().to_string(),
+                        book.and_then(|b| b.best_bid()),
+                        book.and_then(|b| b.best_ask()),
+                        book.and_then(|b| b.spread()),
+                    )
                 }).collect()
             };
+            // Lock released — serialize outside.
+            let summaries: Vec<serde_json::Value> = raw_summaries.into_iter().map(|(id, base, quote, best_bid, best_ask, spread)| {
+                serde_json::json!({
+                    "id": id,
+                    "base": base,
+                    "quote": quote,
+                    "best_bid": best_bid.map(|p| format_amount(p, PRICE_DECIMALS)),
+                    "best_ask": best_ask.map(|p| format_amount(p, PRICE_DECIMALS)),
+                    "spread": spread.map(|s| format_amount(s, PRICE_DECIMALS)),
+                })
+            }).collect();
             let channel = "markets".to_string();
             let seq = next_ws_seq(&state, &channel);
             let envelope = WsEnvelope {
