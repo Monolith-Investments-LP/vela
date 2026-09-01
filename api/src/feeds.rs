@@ -35,6 +35,15 @@ pub struct FeedManager {
     private_envelope_seqs: HashMap<[u8; 20], u64>,
     /// Public authenticated channel for per-fill toxicity events.
     pub toxicity_tx: broadcast::Sender<serde_json::Value>,
+    /// Institutional drop-copy: fills-only, per-account, delivered to a
+    /// connection separate from the trading connection so risk and
+    /// back-office systems can consume fills without depending on the
+    /// trading session's health. Every fill emitted to the account
+    /// channel is mirrored here.
+    dropcopy_txs: HashMap<[u8; 20], broadcast::Sender<WsEnvelope>>,
+    /// Independent sequence numbers per dropcopy channel so gap
+    /// detection works without interference from the account channel.
+    dropcopy_seqs: HashMap<[u8; 20], u64>,
     channel_capacity: usize,
 }
 
@@ -49,6 +58,8 @@ impl FeedManager {
             private_envelope_txs: HashMap::new(),
             private_envelope_seqs: HashMap::new(),
             toxicity_tx,
+            dropcopy_txs: HashMap::new(),
+            dropcopy_seqs: HashMap::new(),
             channel_capacity: capacity,
         }
     }
@@ -71,6 +82,24 @@ impl FeedManager {
             .entry(user.0)
             .or_insert_with(|| broadcast::channel(capacity).0)
             .subscribe()
+    }
+
+    /// Subscribe to the fills-only drop-copy channel for `user`. Every
+    /// fill on this account is mirrored here from the account channel,
+    /// with its own sequence numbering, on an independent broadcast so
+    /// a slow risk/back-office consumer never back-pressures trading.
+    pub fn subscribe_dropcopy(&mut self, user: &UserId) -> broadcast::Receiver<WsEnvelope> {
+        let capacity = self.channel_capacity;
+        self.dropcopy_txs
+            .entry(user.0)
+            .or_insert_with(|| broadcast::channel(capacity).0)
+            .subscribe()
+    }
+
+    fn next_dropcopy_seq(&mut self, user_bytes: [u8; 20]) -> u64 {
+        let seq = self.dropcopy_seqs.entry(user_bytes).or_insert(0);
+        *seq += 1;
+        *seq
     }
 
     /// Returns a receiver for the toxicity event broadcast channel.
@@ -124,6 +153,31 @@ impl FeedManager {
         }
     }
 
+    /// Send a fill payload to the drop-copy channel for `user_bytes`.
+    /// The envelope's channel string is `dropcopy:{address}` and its
+    /// sequence number is drawn from the independent dropcopy_seqs map
+    /// so drop-copy consumers can detect gaps without being confused by
+    /// the account channel's seq stream.
+    fn send_dropcopy_envelope(&mut self, user_bytes: [u8; 20], data: serde_json::Value) {
+        let address = format!("0x{}", hex::encode(user_bytes));
+        let channel = format!("dropcopy:{}", address);
+        let seq = self.next_dropcopy_seq(user_bytes);
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let envelope = WsEnvelope {
+            msg_type: "fill".to_string(),
+            channel,
+            seq,
+            data,
+            timestamp: ts,
+        };
+        if let Some(tx) = self.dropcopy_txs.get(&user_bytes) {
+            let _ = tx.send(envelope);
+        }
+    }
+
     pub fn dispatch_response_batch(&mut self, user: &UserId, responses: &[Response]) {
         for response in responses {
             match response {
@@ -157,7 +211,17 @@ impl FeedManager {
                         "timestamp": fill.timestamp,
                     });
                     self.send_account_envelope(fill.maker.0, "fill", fill_data.clone());
-                    self.send_account_envelope(fill.taker.0, "fill", fill_data);
+                    self.send_account_envelope(fill.taker.0, "fill", fill_data.clone());
+
+                    // Mirror to the drop-copy channel with independent
+                    // sequence numbering so risk / back-office systems
+                    // can consume fills on a connection separate from
+                    // trading. Each side's drop-copy is delivered
+                    // independently; the sender is fire-and-forget so a
+                    // slow drop-copy consumer never back-pressures the
+                    // trading path.
+                    self.send_dropcopy_envelope(fill.maker.0, fill_data.clone());
+                    self.send_dropcopy_envelope(fill.taker.0, fill_data);
 
                     // Emit toxicity event for every fill that was part of a matched
                     // taker order.  Score of 0.0 means the fill was a resting order

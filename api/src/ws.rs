@@ -160,6 +160,7 @@ async fn handle_ws_inner(socket: WebSocket, state: Arc<AppState>) {
     let mut public_rx = state.feeds.lock().await.subscribe_public();
     let mut private_rx: Option<broadcast::Receiver<WsServerMessage>> = None;
     let mut account_rx: Option<broadcast::Receiver<WsEnvelope>> = None;
+    let mut dropcopy_rx: Option<broadcast::Receiver<WsEnvelope>> = None;
     let mut pending_nonce: Option<String> = None;
     let mut subscribed_channels: HashSet<String> = HashSet::new();
     let mut ws_rx = state.ws_tx.subscribe();
@@ -177,6 +178,7 @@ async fn handle_ws_inner(socket: WebSocket, state: Arc<AppState>) {
                                     &mut authenticated_user,
                                     &mut private_rx,
                                     &mut account_rx,
+                                    &mut dropcopy_rx,
                                     &mut pending_nonce,
                                     &mut subscribed_channels,
                                 ).await;
@@ -283,6 +285,32 @@ async fn handle_ws_inner(socket: WebSocket, state: Arc<AppState>) {
                     None => return,
                 }
             }
+
+            msg = async {
+                match dropcopy_rx.as_mut() {
+                    None => std::future::pending::<Option<WsEnvelope>>().await,
+                    Some(rx) => loop {
+                        match rx.recv().await {
+                            Ok(m) => break Some(m),
+                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(broadcast::error::RecvError::Closed) => break None,
+                        }
+                    },
+                }
+            } => {
+                match msg {
+                    Some(envelope) => {
+                        // Drop-copy is gated on explicit subscribe so an
+                        // authenticated trading connection doesn't pay
+                        // the fanout cost unless the client asked for it.
+                        if subscribed_channels.contains(&envelope.channel) {
+                            let json = serde_json::to_string(&envelope).unwrap_or_default();
+                            if sender.send(Message::Text(json)).await.is_err() { return; }
+                        }
+                    }
+                    None => return,
+                }
+            }
         }
     }
 }
@@ -293,6 +321,7 @@ async fn handle_client_message(
     authenticated_user: &mut Option<types::UserId>,
     private_rx: &mut Option<broadcast::Receiver<WsServerMessage>>,
     account_rx: &mut Option<broadcast::Receiver<WsEnvelope>>,
+    dropcopy_rx: &mut Option<broadcast::Receiver<WsEnvelope>>,
     pending_nonce: &mut Option<String>,
     subscribed_channels: &mut HashSet<String>,
 ) -> Vec<String> {
@@ -320,6 +349,7 @@ async fn handle_client_message(
                     ts,
                     state,
                     account_rx,
+                    dropcopy_rx,
                     subscribed_channels,
                 )
                 .await
@@ -342,11 +372,43 @@ async fn handle_client_message(
             let ts = now_ms();
             let mut responses: Vec<String> = vec![];
 
+            // Filter out dropcopy channels that the current session isn't
+            // authorized for. Silently drops unauthorized attempts (no
+            // side channel signal) and emits a per-channel error message
+            // so the client sees what happened.
+            let authorized: Vec<String> = channels
+                .iter()
+                .filter(|c| {
+                    if let Some(addr_str) = c.strip_prefix("dropcopy:") {
+                        match (
+                            authenticated_user.as_ref(),
+                            types::UserId::from_hex(addr_str),
+                        ) {
+                            (Some(u), Ok(want)) if *u == want => true,
+                            _ => {
+                                let err = WsServerMessage::Error {
+                                    code: "DROPCOPY_UNAUTHORIZED".to_string(),
+                                    message: format!(
+                                        "not authenticated for {} — auth as that wallet first",
+                                        c
+                                    ),
+                                };
+                                responses.push(serde_json::to_string(&err).unwrap_or_default());
+                                false
+                            }
+                        }
+                    } else {
+                        true
+                    }
+                })
+                .cloned()
+                .collect();
+
             {
                 let engine = state.engine.lock().await;
                 let fills = state.fills.lock().await;
 
-                for channel in &channels {
+                for channel in &authorized {
                     subscribed_channels.insert(channel.clone());
 
                     if let Some(market_str) = channel.strip_prefix("book.") {
@@ -466,7 +528,9 @@ async fn handle_client_message(
                 }
             }
 
-            let subscribed = WsServerMessage::Subscribed { channels };
+            let subscribed = WsServerMessage::Subscribed {
+                channels: authorized,
+            };
             responses.push(serde_json::to_string(&subscribed).unwrap_or_default());
             responses
         }
@@ -533,6 +597,7 @@ async fn handle_timestamp_auth(
     timestamp: u64,
     state: &Arc<AppState>,
     account_rx: &mut Option<broadcast::Receiver<WsEnvelope>>,
+    dropcopy_rx: &mut Option<broadcast::Receiver<WsEnvelope>>,
     subscribed_channels: &mut HashSet<String>,
 ) -> Vec<String> {
     let now = now_ms();
@@ -558,8 +623,19 @@ async fn handle_timestamp_auth(
             let channel = format!("account:{}", address);
             subscribed_channels.insert(channel.clone());
 
-            let rx = state.feeds.lock().await.subscribe_account_private(&user);
-            *account_rx = Some(rx);
+            {
+                let mut feeds = state.feeds.lock().await;
+                let rx = feeds.subscribe_account_private(&user);
+                *account_rx = Some(rx);
+                // Also pre-subscribe the drop-copy stream so a client
+                // that later sends `subscribe: ["dropcopy:<addr>"]`
+                // starts receiving without a second auth round-trip.
+                // The drop-copy select-arm gates on subscribed_channels
+                // so no envelopes are actually delivered until the
+                // client asks for them.
+                let dc_rx = feeds.subscribe_dropcopy(&user);
+                *dropcopy_rx = Some(dc_rx);
+            }
 
             let ts = now_ms();
 
