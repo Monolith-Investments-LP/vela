@@ -303,6 +303,8 @@ pub fn replay_wal_entries(
                                 updated_at: now,
                                 fills: vec![],
                                 da_hash: None,
+                                reasoning_trace_hash: None,
+                                agent_id: None,
                             }
                         });
                     }

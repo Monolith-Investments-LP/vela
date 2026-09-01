@@ -52,6 +52,18 @@ pub struct StoredOrder {
     pub updated_at: u64,
     pub fills: Vec<OrderFillRecord>,
     pub da_hash: Option<String>,
+    /// Optional keccak256 hash (0x-prefixed hex) of the agent's model
+    /// reasoning trace at order-submission time. When present, links
+    /// this order to a compliance-auditable trace stored in the
+    /// caller's own S3 / private log. Vela commits the hash but does
+    /// not store the trace itself.
+    #[serde(default)]
+    pub reasoning_trace_hash: Option<String>,
+    /// Optional agent identifier string ("claude-opus-4.7",
+    /// "gpt-5-turbo", "internal-mm-v3") the caller wants attached to
+    /// audit records. Free-text; not verified.
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,6 +159,17 @@ pub struct PostOrderBody {
     pub client_order_id: Option<String>,
     pub address: String,
     pub signature: String,
+    /// Optional 0x-prefixed 32-byte keccak256 hash of the agent's
+    /// reasoning trace for this order. Vela records the hash in
+    /// StoredOrder so post-hoc audit can prove the trace existed at
+    /// submission time. The trace itself lives in the caller's own
+    /// storage.
+    #[serde(default)]
+    pub reasoning_trace_hash: Option<String>,
+    /// Optional model/agent identifier ("claude-opus-4.7", etc.).
+    /// Free-text; not verified.
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

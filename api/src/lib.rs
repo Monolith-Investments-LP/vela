@@ -19,6 +19,7 @@ pub mod mm;
 pub mod openapi;
 pub mod pyth;
 pub mod rate_limit;
+pub mod reasoning_attest;
 pub mod rfq;
 pub mod snapshot;
 pub mod subaccounts;

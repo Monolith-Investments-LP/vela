@@ -268,6 +268,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/agents/register", post(agents_register))
         .route("/agents/revoke", post(agents_revoke))
         .route("/agents/:master", get(agents_list))
+        .route(
+            "/agents/reasoning/attest",
+            post(crate::reasoning_attest::attest_handler),
+        )
         .route("/orders/algo/twap", post(post_twap_algo))
         .route("/orders/algo/cancel", post(cancel_algo))
         .route("/orders/algo/:parent_id", get(get_algo_status))
@@ -974,7 +978,24 @@ async fn record_order_and_fills(
         updated_at: ts,
         fills: self_fills,
         da_hash: None,
+        reasoning_trace_hash: body.reasoning_trace_hash.clone(),
+        agent_id: body.agent_id.clone(),
     };
+
+    // Compliance-audit trail: emit a structured tracing event for
+    // agent-tagged orders so operator log aggregators can index and
+    // preserve the linkage independently of Vela's own storage.
+    if let Some(hash) = &body.reasoning_trace_hash {
+        tracing::info!(
+            target: "reasoning_trace",
+            order_id = posted.order_id,
+            user = %body.address.to_lowercase(),
+            agent_id = ?body.agent_id,
+            reasoning_trace_hash = %hash,
+            market = %body.market,
+            "agent-tagged order recorded"
+        );
+    }
 
     {
         let mut fills_guard = state.fills.lock().await;
