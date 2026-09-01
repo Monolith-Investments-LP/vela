@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::EngineMap;
 use types::{AssetId, Balance, MarketId, Order, OrderId, Quantity, UserId, UserMetadata};
 
 #[derive(Debug, Clone)]
@@ -10,10 +10,10 @@ enum DeltaEntry {
 
 #[derive(Debug, Default)]
 pub struct DeltaBuffer {
-    balance_overlay: HashMap<(UserId, AssetId), Balance>,
-    metadata_overlay: HashMap<UserId, UserMetadata>,
+    balance_overlay: EngineMap<(UserId, AssetId), Balance>,
+    metadata_overlay: EngineMap<UserId, UserMetadata>,
     entries: Vec<DeltaEntry>,
-    fee_delta: HashMap<String, i64>,
+    fee_delta: EngineMap<String, i64>,
 }
 
 impl DeltaBuffer {
@@ -29,7 +29,7 @@ impl DeltaBuffer {
         &self,
         user: &UserId,
         asset: &AssetId,
-        base: &HashMap<(UserId, AssetId), Balance>,
+        base: &EngineMap<(UserId, AssetId), Balance>,
     ) -> Balance {
         self.balance_overlay
             .get(&(user.clone(), *asset))
@@ -47,7 +47,7 @@ impl DeltaBuffer {
         user: &UserId,
         asset: &AssetId,
         amount: u64,
-        base: &HashMap<(UserId, AssetId), Balance>,
+        base: &EngineMap<(UserId, AssetId), Balance>,
     ) {
         let mut bal = self.get_balance(user, asset, base);
         bal.available += amount;
@@ -59,7 +59,7 @@ impl DeltaBuffer {
         user: &UserId,
         asset: &AssetId,
         amount: u64,
-        base: &HashMap<(UserId, AssetId), Balance>,
+        base: &EngineMap<(UserId, AssetId), Balance>,
     ) {
         let mut bal = self.get_balance(user, asset, base);
         bal.locked = bal.locked.saturating_sub(amount);
@@ -71,7 +71,7 @@ impl DeltaBuffer {
         user: &UserId,
         asset: &AssetId,
         amount: u64,
-        base: &HashMap<(UserId, AssetId), Balance>,
+        base: &EngineMap<(UserId, AssetId), Balance>,
     ) {
         let mut bal = self.get_balance(user, asset, base);
         bal.available = bal.available.saturating_sub(amount);
@@ -83,7 +83,7 @@ impl DeltaBuffer {
         user: &UserId,
         asset: &AssetId,
         amount: u64,
-        base: &HashMap<(UserId, AssetId), Balance>,
+        base: &EngineMap<(UserId, AssetId), Balance>,
     ) {
         let mut bal = self.get_balance(user, asset, base);
         bal.available = bal.available.saturating_sub(amount);
@@ -96,7 +96,7 @@ impl DeltaBuffer {
         user: &UserId,
         asset: &AssetId,
         amount: u64,
-        base: &HashMap<(UserId, AssetId), Balance>,
+        base: &EngineMap<(UserId, AssetId), Balance>,
     ) {
         let mut bal = self.get_balance(user, asset, base);
         bal.locked = bal.locked.saturating_sub(amount);
@@ -104,7 +104,7 @@ impl DeltaBuffer {
         self.set_balance(bal);
     }
 
-    pub fn get_metadata(&self, user: &UserId, base: &HashMap<UserId, UserMetadata>) -> UserMetadata {
+    pub fn get_metadata(&self, user: &UserId, base: &EngineMap<UserId, UserMetadata>) -> UserMetadata {
         self.metadata_overlay
             .get(user)
             .or_else(|| base.get(user))

@@ -8,7 +8,7 @@ use types::{
     AssetId, Balance, BatchResult, MarketId, OrderId, Request, Response, Timestamp, UserId,
     UserMetadata,
 };
-use crate::{BatchMetrics, BatchedRequest, MatchingEngine, UserState};
+use crate::{BatchMetrics, BatchedRequest, EngineMap, MatchingEngine, UserState};
 
 pub struct MarketShard {
     pub engine: MatchingEngine,
@@ -64,9 +64,9 @@ impl MarketShards {
             HashMap::new();
         let mut phase1_responses: Vec<(usize, Vec<Response>)> = Vec::new();
 
-        let bal_arc: Arc<HashMap<(UserId, AssetId), Balance>>;
-        let meta_arc: Arc<HashMap<UserId, UserMetadata>>;
-        let snap_fees: HashMap<String, u64>;
+        let bal_arc: Arc<EngineMap<(UserId, AssetId), Balance>>;
+        let meta_arc: Arc<EngineMap<UserId, UserMetadata>>;
+        let snap_fees: EngineMap<String, u64>;
 
         {
             let mut us = shards.user_state.write().await;
@@ -119,7 +119,7 @@ impl MarketShards {
 
             // Sub-pass 1c/1d: validate PostOrders and Cancels against snapshot.
             // Track in-batch reservations to prevent cross-market double-spend.
-            let mut reserved: HashMap<(UserId, AssetId), u64> = HashMap::new();
+            let mut reserved: EngineMap<(UserId, AssetId), u64> = EngineMap::default();
 
             for (idx, (request, ts, _responder, _proof)) in pending_items.iter().enumerate() {
                 match request {
@@ -163,9 +163,9 @@ impl MarketShards {
             #[allow(dead_code)]
             market_id: MarketId,
             responses_by_idx: Vec<(usize, Vec<Response>)>,
-            final_balances: HashMap<(UserId, AssetId), Balance>,
-            final_metadata: HashMap<UserId, UserMetadata>,
-            final_fees: HashMap<String, u64>,
+            final_balances: EngineMap<(UserId, AssetId), Balance>,
+            final_metadata: EngineMap<UserId, UserMetadata>,
+            final_fees: EngineMap<String, u64>,
         }
 
         let shard_futures: Vec<_> = per_market
@@ -199,9 +199,9 @@ impl MarketShards {
                             return ShardResult {
                                 market_id: market_id_clone,
                                 responses_by_idx: responses,
-                                final_balances: HashMap::new(),
-                                final_metadata: HashMap::new(),
-                                final_fees: HashMap::new(),
+                                final_balances: EngineMap::default(),
+                                final_metadata: EngineMap::default(),
+                                final_fees: EngineMap::default(),
                             };
                         }
                     };

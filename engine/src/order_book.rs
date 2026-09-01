@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
+use crate::EngineMap;
 use types::{Order, OrderId, OrderSide, Price, Quantity, VelaError};
 
 #[derive(Debug, Clone)]
@@ -26,8 +27,8 @@ pub struct OrderBook {
     pub market: types::MarketId,
     bids: BTreeMap<Price, PriceLevel>,
     asks: BTreeMap<Price, PriceLevel>,
-    order_index: HashMap<OrderId, (OrderSide, Price)>,
-    client_order_id_index: HashMap<(types::UserId, String), OrderId>,
+    order_index: EngineMap<OrderId, (OrderSide, Price)>,
+    client_order_id_index: EngineMap<(types::UserId, String), OrderId>,
     pub max_orders: usize,
     pub total_orders: usize,
 }
@@ -38,8 +39,8 @@ impl OrderBook {
             market,
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
-            order_index: HashMap::new(),
-            client_order_id_index: HashMap::new(),
+            order_index: EngineMap::default(),
+            client_order_id_index: EngineMap::default(),
             max_orders,
             total_orders: 0,
         }

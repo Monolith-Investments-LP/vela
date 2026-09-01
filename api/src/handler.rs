@@ -2690,7 +2690,8 @@ async fn admin_fees_handler(
     }
 
     let us = state.shards.user_state.read().await;
-    let fee_balances: std::collections::HashMap<String, u64> = us.fee_balances.clone();
+    let fee_balances: std::collections::HashMap<String, u64> =
+        us.fee_balances.iter().map(|(k, v)| (k.clone(), *v)).collect();
     let total_usdc = fee_balances.get("USDC").copied().unwrap_or(0);
     let total_fees_collected_usdc = format_amount(total_usdc, PRICE_DECIMALS);
 

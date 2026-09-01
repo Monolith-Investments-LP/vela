@@ -1,34 +1,33 @@
-use std::collections::HashMap;
 use types::{
     AssetId, Balance, CancelOrderRequest, DepositRequest, Market,
     MarketId, OrderId, OrderSide, PostOrderRequest, Timestamp, UserId, UserMetadata, VelaError,
     WithdrawalRequest,
 };
 use crate::credit::CreditSystem;
-use crate::MatchingEngine;
+use crate::{EngineMap, MatchingEngine};
 
 pub struct UserState {
-    pub balances: HashMap<(UserId, AssetId), Balance>,
-    pub metadata: HashMap<UserId, UserMetadata>,
+    pub balances: EngineMap<(UserId, AssetId), Balance>,
+    pub metadata: EngineMap<UserId, UserMetadata>,
     pub credit_system: CreditSystem,
-    pub fee_balances: HashMap<String, u64>,
+    pub fee_balances: EngineMap<String, u64>,
     pub next_order_id: OrderId,
-    pub markets: HashMap<MarketId, Market>,
-    pub order_to_market: HashMap<OrderId, MarketId>,
-    pub client_order_to_market: HashMap<(UserId, String), MarketId>,
+    pub markets: EngineMap<MarketId, Market>,
+    pub order_to_market: EngineMap<OrderId, MarketId>,
+    pub client_order_to_market: EngineMap<(UserId, String), MarketId>,
 }
 
 impl UserState {
     pub fn new(default_credit_ratio: f64) -> Self {
         UserState {
-            balances: HashMap::new(),
-            metadata: HashMap::new(),
+            balances: EngineMap::default(),
+            metadata: EngineMap::default(),
             credit_system: CreditSystem::new(default_credit_ratio),
-            fee_balances: HashMap::new(),
+            fee_balances: EngineMap::default(),
             next_order_id: 1,
-            markets: HashMap::new(),
-            order_to_market: HashMap::new(),
-            client_order_to_market: HashMap::new(),
+            markets: EngineMap::default(),
+            order_to_market: EngineMap::default(),
+            client_order_to_market: EngineMap::default(),
         }
     }
 
@@ -80,9 +79,9 @@ impl UserState {
         &mut self,
         req: &PostOrderRequest,
         ts: Timestamp,
-        reserved: &std::collections::HashMap<(UserId, AssetId), u64>,
-        snap_balances: &HashMap<(UserId, AssetId), Balance>,
-        snap_metadata: &HashMap<UserId, UserMetadata>,
+        reserved: &EngineMap<(UserId, AssetId), u64>,
+        snap_balances: &EngineMap<(UserId, AssetId), Balance>,
+        snap_metadata: &EngineMap<UserId, UserMetadata>,
     ) -> Result<(OrderId, AssetId, u64), VelaError> {
         // Validate market exists
         if !self.markets.contains_key(&req.market) {
@@ -168,7 +167,7 @@ impl UserState {
         &mut self,
         req: &PostOrderRequest,
         ts: Timestamp,
-        reserved: &std::collections::HashMap<(UserId, AssetId), u64>,
+        reserved: &EngineMap<(UserId, AssetId), u64>,
     ) -> Result<(OrderId, AssetId, u64), VelaError> {
         let snap_balances = self.balances.clone();
         let snap_metadata = self.metadata.clone();
@@ -183,7 +182,7 @@ impl UserState {
         req: &PostOrderRequest,
         ts: Timestamp,
     ) -> Result<OrderId, VelaError> {
-        let reserved = std::collections::HashMap::new();
+        let reserved = EngineMap::default();
         let snap_balances = self.balances.clone();
         let snap_metadata = self.metadata.clone();
         let (order_id, spend_asset, order_notional) =
@@ -307,8 +306,8 @@ impl UserState {
     /// by the shard and require no delta application.
     pub fn apply_balance_delta(
         &mut self,
-        final_bals: &HashMap<(UserId, AssetId), Balance>,
-        snapshot: &HashMap<(UserId, AssetId), Balance>,
+        final_bals: &EngineMap<(UserId, AssetId), Balance>,
+        snapshot: &EngineMap<(UserId, AssetId), Balance>,
     ) {
         for (key, final_bal) in final_bals {
             let snap_bal = snapshot.get(key).cloned().unwrap_or_else(|| Balance {
@@ -350,8 +349,8 @@ impl UserState {
     /// Apply metadata delta: merge changes from shard execution.
     pub fn apply_metadata_delta(
         &mut self,
-        final_meta: &HashMap<UserId, UserMetadata>,
-        snapshot_meta: &HashMap<UserId, UserMetadata>,
+        final_meta: &EngineMap<UserId, UserMetadata>,
+        snapshot_meta: &EngineMap<UserId, UserMetadata>,
     ) {
         // For each user changed in the shard, apply to current state
         for (user, final_m) in final_meta {
@@ -419,8 +418,8 @@ impl UserState {
     /// Apply fee balance delta.
     pub fn apply_fee_delta(
         &mut self,
-        final_fees: &HashMap<String, u64>,
-        snap_fees: &HashMap<String, u64>,
+        final_fees: &EngineMap<String, u64>,
+        snap_fees: &EngineMap<String, u64>,
     ) {
         let mut keys: std::collections::HashSet<String> = std::collections::HashSet::new();
         for k in final_fees.keys() {
@@ -527,12 +526,12 @@ mod tests {
         let final_a = make_meta(&uid, &[1]);
         let final_b = make_meta(&uid, &[2]);
 
-        let mut snap_map = HashMap::new();
+        let mut snap_map: EngineMap<UserId, UserMetadata> = EngineMap::default();
         snap_map.insert(uid.clone(), snap);
 
-        let mut final_map_a = HashMap::new();
+        let mut final_map_a: EngineMap<UserId, UserMetadata> = EngineMap::default();
         final_map_a.insert(uid.clone(), final_a);
-        let mut final_map_b = HashMap::new();
+        let mut final_map_b: EngineMap<UserId, UserMetadata> = EngineMap::default();
         final_map_b.insert(uid.clone(), final_b);
 
         state.apply_metadata_delta(&final_map_a, &snap_map);
@@ -553,12 +552,12 @@ mod tests {
         let final_a = make_meta(&uid, &[5]);
         let final_b = make_meta(&uid, &[5]);
 
-        let mut snap_map = HashMap::new();
+        let mut snap_map: EngineMap<UserId, UserMetadata> = EngineMap::default();
         snap_map.insert(uid.clone(), snap);
 
-        let mut final_map_a = HashMap::new();
+        let mut final_map_a: EngineMap<UserId, UserMetadata> = EngineMap::default();
         final_map_a.insert(uid.clone(), final_a);
-        let mut final_map_b = HashMap::new();
+        let mut final_map_b: EngineMap<UserId, UserMetadata> = EngineMap::default();
         final_map_b.insert(uid.clone(), final_b);
 
         state.apply_metadata_delta(&final_map_a, &snap_map);
@@ -585,12 +584,12 @@ mod tests {
         let final_a = make_meta(&uid, &a_nonces);
         let final_b = make_meta(&uid, &b_nonces);
 
-        let mut snap_map = HashMap::new();
+        let mut snap_map: EngineMap<UserId, UserMetadata> = EngineMap::default();
         snap_map.insert(uid.clone(), snap);
 
-        let mut final_map_a = HashMap::new();
+        let mut final_map_a: EngineMap<UserId, UserMetadata> = EngineMap::default();
         final_map_a.insert(uid.clone(), final_a);
-        let mut final_map_b = HashMap::new();
+        let mut final_map_b: EngineMap<UserId, UserMetadata> = EngineMap::default();
         final_map_b.insert(uid.clone(), final_b);
 
         state.apply_metadata_delta(&final_map_a, &snap_map);

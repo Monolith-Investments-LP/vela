@@ -1,3 +1,12 @@
+/// Faster-hashing HashMap alias used across the engine's hot paths.
+///
+/// Alias for `std::collections::HashMap` with `ahash::RandomState`. All
+/// existing `HashMap<K, V>` method calls compile without change; only
+/// construction sites need `EngineMap::default()` instead of `::new()`.
+/// Serde round-trips are wire-compatible with the previous default
+/// `RandomState` — the hasher is chosen at deserialize time.
+pub type EngineMap<K, V> = std::collections::HashMap<K, V, ahash::RandomState>;
+
 pub mod batch_dispatcher;
 pub mod matching_engine;
 pub mod order_book;

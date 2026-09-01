@@ -73,7 +73,8 @@ pub async fn save_snapshot(state: Arc<crate::AppState>, clean_shutdown: bool) ->
             metadata.insert(user.to_hex(), meta.clone());
         }
 
-        let fee_balances = engine.fee_balances.clone();
+        let fee_balances: HashMap<String, u64> =
+            engine.fee_balances.iter().map(|(k, v)| (k.clone(), *v)).collect();
         let timestamp = engine.timestamp;
         let sequence = engine.next_order_id();
 
@@ -197,7 +198,7 @@ pub fn restore_engine_from_snapshot(
 
     engine.set_next_order_id(snapshot.sequence);
 
-    engine.fee_balances = snapshot.fee_balances;
+    engine.fee_balances = snapshot.fee_balances.into_iter().collect();
 
     tracing::info!("Engine restored from snapshot: {}", snapshot.timestamp);
 

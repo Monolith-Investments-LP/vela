@@ -44,3 +44,4 @@ k256 = { version = "0.13", features = ["ecdsa"] }
 hex = "0.4"
 rand = "0.8"
 criterion = { version = "0.5", features = ["html_reports"] }
+ahash = { version = "0.8", features = ["serde"] }

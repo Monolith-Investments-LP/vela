@@ -63,11 +63,15 @@ impl StateManager {
         self.pending_batch.push((request, responses));
     }
 
-    pub fn commit_batch(
+    pub fn commit_batch<S1, S2>(
         &mut self,
-        balances: &HashMap<(UserId, AssetId), Balance>,
-        metadata: &HashMap<UserId, UserMetadata>,
-    ) -> Hash {
+        balances: &HashMap<(UserId, AssetId), Balance, S1>,
+        metadata: &HashMap<UserId, UserMetadata, S2>,
+    ) -> Hash
+    where
+        S1: std::hash::BuildHasher,
+        S2: std::hash::BuildHasher,
+    {
         for balance in balances.values() {
             self.cache.set_balance(balance);
         }

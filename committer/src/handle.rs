@@ -138,8 +138,8 @@ pub fn make_commit_batch(
     CommitBatch::new(
         sequence,
         ts,
-        engine.snapshot_balances().clone(),
-        engine.snapshot_metadata().clone(),
+        engine.snapshot_balances().iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        engine.snapshot_metadata().iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         requests,
         engine.markets.keys().cloned().collect(),
     )

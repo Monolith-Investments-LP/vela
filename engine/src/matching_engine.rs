@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use types::{
     AssetId, Balance, CancelOrderRequest, DepositRequest, ErrorCode, ErrorResponse, FeeConfig,
@@ -7,18 +7,18 @@ use types::{
     OrderStatus, OrderType, PostOrderRequest, Request, Response, Timestamp, UserId, UserMetadata,
     VelaError, WithdrawalRequest,
 };
-use crate::{DeltaBuffer, CreditSystem, OrderBook};
+use crate::{DeltaBuffer, CreditSystem, EngineMap, OrderBook};
 use crate::ofi::{ToxicityScorer, TOXICITY_PENALTY_THRESHOLD, CREDIT_PENALTY_MULTIPLIER, CREDIT_PENALTY_DURATION_US};
 
 type ExpiryCandidate = (Timestamp, OrderId, u64, MarketId, OrderSide, u64, u64, Option<String>);
 
 pub struct MatchingEngine {
-    pub order_books: HashMap<MarketId, OrderBook>,
-    pub balances: HashMap<(UserId, AssetId), Balance>,
-    pub metadata: HashMap<UserId, UserMetadata>,
-    pub markets: HashMap<MarketId, Market>,
+    pub order_books: EngineMap<MarketId, OrderBook>,
+    pub balances: EngineMap<(UserId, AssetId), Balance>,
+    pub metadata: EngineMap<UserId, UserMetadata>,
+    pub markets: EngineMap<MarketId, Market>,
     pub fee_config: FeeConfig,
-    pub fee_balances: HashMap<String, u64>,
+    pub fee_balances: EngineMap<String, u64>,
     pub credit_system: CreditSystem,
     pub timestamp: Timestamp,
     next_order_id: OrderId,
@@ -27,19 +27,19 @@ pub struct MatchingEngine {
     toxicity_scorer: RefCell<ToxicityScorer>,
     /// Used by MarketShards sharded dispatch to inject a shared balance snapshot.
     /// When Some, DeltaBuffer base calls use this instead of self.balances.
-    pub(crate) snapshot_balances: Option<Arc<HashMap<(UserId, AssetId), Balance>>>,
-    pub(crate) snapshot_metadata: Option<Arc<HashMap<UserId, UserMetadata>>>,
+    pub(crate) snapshot_balances: Option<Arc<EngineMap<(UserId, AssetId), Balance>>>,
+    pub(crate) snapshot_metadata: Option<Arc<EngineMap<UserId, UserMetadata>>>,
 }
 
 impl MatchingEngine {
     pub fn new(fee_config: FeeConfig, default_credit_ratio: f64) -> Self {
         MatchingEngine {
-            order_books: HashMap::new(),
-            balances: HashMap::new(),
-            metadata: HashMap::new(),
-            markets: HashMap::new(),
+            order_books: EngineMap::default(),
+            balances: EngineMap::default(),
+            metadata: EngineMap::default(),
+            markets: EngineMap::default(),
             fee_config,
-            fee_balances: HashMap::new(),
+            fee_balances: EngineMap::default(),
             credit_system: CreditSystem::new(default_credit_ratio),
             timestamp: 0,
             next_order_id: 1,
@@ -141,7 +141,7 @@ impl MatchingEngine {
             return vec![];
         }
 
-        let bal_base: &HashMap<(UserId, AssetId), Balance> =
+        let bal_base: &EngineMap<(UserId, AssetId), Balance> =
             self.snapshot_balances.as_deref().unwrap_or(&self.balances);
 
         let mut candidates: Vec<ExpiryCandidate> =
@@ -216,9 +216,9 @@ impl MatchingEngine {
             }
         }
 
-        let meta_base: &HashMap<UserId, UserMetadata> =
+        let meta_base: &EngineMap<UserId, UserMetadata> =
             self.snapshot_metadata.as_deref().unwrap_or(&self.metadata);
-        let bal_base: &HashMap<(UserId, AssetId), Balance> =
+        let bal_base: &EngineMap<(UserId, AssetId), Balance> =
             self.snapshot_balances.as_deref().unwrap_or(&self.balances);
 
         let mut meta = delta.get_metadata(&req.user, meta_base);
@@ -328,7 +328,7 @@ impl MatchingEngine {
         market: &Market,
         delta: &mut DeltaBuffer,
     ) -> Result<(Vec<Fill>, Vec<OrderCanceledResponse>), VelaError> {
-        let meta_base: &HashMap<UserId, UserMetadata> =
+        let meta_base: &EngineMap<UserId, UserMetadata> =
             self.snapshot_metadata.as_deref().unwrap_or(&self.metadata);
 
         let book = match self.order_books.get(&order.market) {
@@ -344,7 +344,7 @@ impl MatchingEngine {
 
         let mut fills: Vec<Fill> = vec![];
         let mut taker_remaining = order.quantity;
-        let mut locally_consumed: HashMap<OrderId, u64> = HashMap::new();
+        let mut locally_consumed: EngineMap<OrderId, u64> = EngineMap::default();
         let mut affected_makers: HashSet<UserId> = HashSet::new();
         // Count distinct price levels that actually produced fills (no allocation).
         let mut levels_with_fills: u32 = 0;
@@ -494,7 +494,7 @@ impl MatchingEngine {
                             let notional = CreditSystem::compute_notional(o.price, remaining);
                             let unlock_amt = CreditSystem::compute_notional(o.price, remaining);
 
-                            let bal_base_inner: &HashMap<(UserId, AssetId), Balance> =
+                            let bal_base_inner: &EngineMap<(UserId, AssetId), Balance> =
                                 self.snapshot_balances.as_deref().unwrap_or(&self.balances);
                             delta.record_remove(o.market.clone(), oid);
                             delta.unlock_to_available(
@@ -524,9 +524,9 @@ impl MatchingEngine {
     }
 
     fn apply_fill_balances(&self, fill: &Fill, market: &Market, delta: &mut DeltaBuffer) {
-        let bal_base: &HashMap<(UserId, AssetId), Balance> =
+        let bal_base: &EngineMap<(UserId, AssetId), Balance> =
             self.snapshot_balances.as_deref().unwrap_or(&self.balances);
-        let meta_base: &HashMap<UserId, UserMetadata> =
+        let meta_base: &EngineMap<UserId, UserMetadata> =
             self.snapshot_metadata.as_deref().unwrap_or(&self.metadata);
         let fill_notional = CreditSystem::compute_notional(fill.price, fill.quantity);
 
@@ -717,15 +717,15 @@ impl MatchingEngine {
         self.metadata.keys().cloned().collect()
     }
 
-    pub fn snapshot_balances(&self) -> &std::collections::HashMap<(UserId, AssetId), Balance> {
+    pub fn snapshot_balances(&self) -> &EngineMap<(UserId, AssetId), Balance> {
         &self.balances
     }
 
-    pub fn snapshot_metadata(&self) -> &std::collections::HashMap<UserId, UserMetadata> {
+    pub fn snapshot_metadata(&self) -> &EngineMap<UserId, UserMetadata> {
         &self.metadata
     }
 
-    pub fn snapshot_fee_balances(&self) -> &std::collections::HashMap<String, u64> {
+    pub fn snapshot_fee_balances(&self) -> &EngineMap<String, u64> {
         &self.fee_balances
     }
 
@@ -742,8 +742,8 @@ impl MatchingEngine {
     /// instead of self.balances / self.metadata.
     pub fn set_snapshot(
         &mut self,
-        balances: Option<Arc<HashMap<(UserId, AssetId), Balance>>>,
-        metadata: Option<Arc<HashMap<UserId, UserMetadata>>>,
+        balances: Option<Arc<EngineMap<(UserId, AssetId), Balance>>>,
+        metadata: Option<Arc<EngineMap<UserId, UserMetadata>>>,
     ) {
         self.snapshot_balances = balances;
         self.snapshot_metadata = metadata;
