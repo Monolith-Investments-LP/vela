@@ -337,6 +337,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/borrow-lend/liquidate",
             post(crate::borrow_lend::liquidate_handler),
         )
+        .route(
+            "/portfolio-margin/account/:address",
+            get(crate::portfolio_margin::account_margin_handler),
+        )
+        .route(
+            "/portfolio-margin/preview/:address",
+            post(crate::portfolio_margin::preview_handler),
+        )
         .route("/orders/algo/twap", post(post_twap_algo))
         .route("/orders/algo/cancel", post(cancel_algo))
         .route("/orders/algo/:parent_id", get(get_algo_status))
