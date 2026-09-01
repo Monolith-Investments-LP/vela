@@ -4,7 +4,29 @@ use tokio::sync::broadcast;
 use types::{Response, UserId};
 use crate::types::{WsEnvelope, WsServerMessage};
 
-const CHANNEL_CAPACITY: usize = 1024;
+/// Per-channel broadcast buffer size. Overridable via
+/// `VELA_FEED_CHANNEL_SIZE` at process start. Slow subscribers that fall
+/// more than this many messages behind receive `RecvError::Lagged` and
+/// increment `FEED_LAG_DROPS`.
+fn channel_capacity() -> usize {
+    std::env::var("VELA_FEED_CHANNEL_SIZE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1024)
+}
+
+/// Cumulative count of publish attempts that landed on a broadcast
+/// channel with zero live receivers. Exported via /metrics.
+pub static FEED_NO_SUBSCRIBER_DROPS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Increment on every publish where broadcast::Sender::send returned Err
+/// (all receivers dropped or channel closed). Latency-neutral.
+fn note_drop_if_err<T>(result: Result<usize, broadcast::error::SendError<T>>) {
+    if result.is_err() {
+        FEED_NO_SUBSCRIBER_DROPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
 pub struct FeedManager {
     public_tx: broadcast::Sender<WsServerMessage>,
@@ -13,18 +35,21 @@ pub struct FeedManager {
     private_envelope_seqs: HashMap<[u8; 20], u64>,
     /// Public authenticated channel for per-fill toxicity events.
     pub toxicity_tx: broadcast::Sender<serde_json::Value>,
+    channel_capacity: usize,
 }
 
 impl FeedManager {
     pub fn new() -> Self {
-        let (public_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
-        let (toxicity_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
+        let capacity = channel_capacity();
+        let (public_tx, _) = broadcast::channel(capacity);
+        let (toxicity_tx, _) = broadcast::channel(capacity);
         FeedManager {
             public_tx,
             private_txs: HashMap::new(),
             private_envelope_txs: HashMap::new(),
             private_envelope_seqs: HashMap::new(),
             toxicity_tx,
+            channel_capacity: capacity,
         }
     }
 
@@ -33,16 +58,18 @@ impl FeedManager {
     }
 
     pub fn subscribe_private(&mut self, user: &UserId) -> broadcast::Receiver<WsServerMessage> {
+        let capacity = self.channel_capacity;
         self.private_txs
             .entry(user.0)
-            .or_insert_with(|| broadcast::channel(CHANNEL_CAPACITY).0)
+            .or_insert_with(|| broadcast::channel(capacity).0)
             .subscribe()
     }
 
     pub fn subscribe_account_private(&mut self, user: &UserId) -> broadcast::Receiver<WsEnvelope> {
+        let capacity = self.channel_capacity;
         self.private_envelope_txs
             .entry(user.0)
-            .or_insert_with(|| broadcast::channel(CHANNEL_CAPACITY).0)
+            .or_insert_with(|| broadcast::channel(capacity).0)
             .subscribe()
     }
 
@@ -52,18 +79,18 @@ impl FeedManager {
     }
 
     pub fn publish_public(&self, msg: WsServerMessage) {
-        let _ = self.public_tx.send(msg);
+        note_drop_if_err(self.public_tx.send(msg));
     }
 
     pub fn publish_private(&self, user: &UserId, msg: WsServerMessage) {
         if let Some(tx) = self.private_txs.get(&user.0) {
-            let _ = tx.send(msg);
+            note_drop_if_err(tx.send(msg));
         }
     }
 
     /// Broadcast a toxicity event to all authenticated subscribers.
     pub fn publish_toxicity(&self, event: serde_json::Value) {
-        let _ = self.toxicity_tx.send(event);
+        note_drop_if_err(self.toxicity_tx.send(event));
     }
 
     fn next_account_seq(&mut self, user_bytes: [u8; 20]) -> u64 {

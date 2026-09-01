@@ -458,6 +458,7 @@ async fn post_order(
         decryption_proof: None,
     };
     if state.order_tx.send(channel_item).await.is_err() {
+        crate::ORDER_CHANNEL_SEND_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
     }
     let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
@@ -932,6 +933,7 @@ async fn cancel_order(
         decryption_proof: None,
     };
     if state.order_tx.send(channel_item).await.is_err() {
+        crate::ORDER_CHANNEL_SEND_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
     }
     let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
@@ -1005,6 +1007,7 @@ async fn initiate_withdrawal(
         decryption_proof: None,
     };
     if state.order_tx.send(channel_item).await.is_err() {
+        crate::ORDER_CHANNEL_SEND_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
     }
     let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
@@ -1098,6 +1101,7 @@ async fn deposit_handler(
         decryption_proof: None,
     };
     if state.order_tx.send(channel_item).await.is_err() {
+        crate::ORDER_CHANNEL_SEND_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
     }
     let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
@@ -1321,6 +1325,7 @@ async fn force_include_handler(
         decryption_proof: None,
     };
     if state.order_tx.send(channel_item).await.is_err() {
+        crate::ORDER_CHANNEL_SEND_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
     }
     let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {

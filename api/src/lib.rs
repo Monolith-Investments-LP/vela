@@ -31,6 +31,11 @@ use crate::committee_handler::PendingEncryptedOrders;
 /// Re-export so that handler modules can use a stable local name.
 pub use engine::batch_dispatcher::BatchedRequest as OrderChannelItem;
 
+/// Cumulative count of order-channel sends that failed (dispatcher gone
+/// or channel closed). Distinct from ws feed drops. Exposed via /metrics.
+pub static ORDER_CHANNEL_SEND_FAILURES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 pub struct AppState {
     pub engine: Arc<Mutex<MatchingEngine>>,
     pub shards: Arc<MarketShards>,
@@ -112,7 +117,11 @@ impl AppState {
             .and_then(|v| v.parse().ok())
             .unwrap_or(256);
 
-        let (order_tx, order_rx) = tokio::sync::mpsc::channel::<BatchedRequest>(1024);
+        let order_channel_size: usize = std::env::var("VELA_ORDER_CHANNEL_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1024);
+        let (order_tx, order_rx) = tokio::sync::mpsc::channel::<BatchedRequest>(order_channel_size);
 
         // Build UserState and MarketShards from engine
         let mut user_state = UserState::new(5.0);
