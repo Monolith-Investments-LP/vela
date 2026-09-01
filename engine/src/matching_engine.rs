@@ -349,23 +349,25 @@ impl MatchingEngine {
         // Count distinct price levels that actually produced fills (no allocation).
         let mut levels_with_fills: u32 = 0;
 
-        let matchable: Vec<(u64, Vec<Order>)> = match order.side {
-            OrderSide::Bid => book.matchable_asks(order.price),
-            OrderSide::Ask => book.matchable_bids(order.price),
-        };
+        let matchable_iter: Box<dyn Iterator<Item = (u64, &std::collections::VecDeque<Order>)>> =
+            match order.side {
+                OrderSide::Bid => Box::new(book.matchable_asks_ref(order.price)),
+                OrderSide::Ask => Box::new(book.matchable_bids_ref(order.price)),
+            };
 
-        'outer: for (fill_price, level_orders) in &matchable {
+        'outer: for (fill_price, level_orders) in matchable_iter {
             let fills_before = fills.len();
             for resting in level_orders {
                 if taker_remaining == 0 { break 'outer; }
                 if resting.user == order.user { continue; }
 
                 let consumed = locally_consumed.get(&resting.id).copied().unwrap_or(0);
-                let resting_remaining = resting.remaining_quantity().saturating_sub(consumed);
+                let remaining_at_start = resting.remaining_quantity();
+                let resting_remaining = remaining_at_start.saturating_sub(consumed);
                 if resting_remaining == 0 { continue; }
 
                 let fill_qty = taker_remaining.min(resting_remaining);
-                let fill_notional = CreditSystem::compute_notional(*fill_price, fill_qty);
+                let fill_notional = CreditSystem::compute_notional(fill_price, fill_qty);
 
                 let taker_fee = (fill_notional as i64 * market.taker_fee_bps) / 10_000;
                 let maker_fee = (fill_notional as i64 * market.maker_fee_bps) / 10_000;
@@ -377,7 +379,7 @@ impl MatchingEngine {
                     taker: order.user.clone(),
                     market: order.market.clone(),
                     side: order.side,
-                    price: *fill_price,
+                    price: fill_price,
                     quantity: fill_qty,
                     maker_fee,
                     taker_fee,
@@ -392,7 +394,7 @@ impl MatchingEngine {
                 let new_consumed = consumed + fill_qty;
                 locally_consumed.insert(resting.id, new_consumed);
 
-                let fully_consumed = new_consumed >= resting.quantity;
+                let fully_consumed = new_consumed >= remaining_at_start;
                 let is_bid_maker = resting.side == OrderSide::Bid;
                 if fully_consumed {
                     delta.record_remove(order.market.clone(), resting.id);

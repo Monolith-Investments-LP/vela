@@ -30,7 +30,6 @@ pub struct OrderBook {
     client_order_id_index: HashMap<(types::UserId, String), OrderId>,
     pub max_orders: usize,
     pub total_orders: usize,
-    next_order_id: OrderId,
 }
 
 impl OrderBook {
@@ -43,14 +42,7 @@ impl OrderBook {
             client_order_id_index: HashMap::new(),
             max_orders,
             total_orders: 0,
-            next_order_id: 1,
         }
-    }
-
-    pub fn next_id(&mut self) -> OrderId {
-        let id = self.next_order_id;
-        self.next_order_id += 1;
-        id
     }
 
     pub fn is_full(&self) -> bool {
@@ -169,6 +161,7 @@ impl OrderBook {
         }
     }
 
+    #[allow(dead_code)]
     pub fn matchable_asks(&self, bid_price: Price) -> Vec<(Price, Vec<Order>)> {
         self.asks
             .iter()
@@ -177,6 +170,7 @@ impl OrderBook {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub fn matchable_bids(&self, ask_price: Price) -> Vec<(Price, Vec<Order>)> {
         self.bids
             .iter()
