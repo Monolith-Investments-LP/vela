@@ -252,6 +252,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(admin_export_trades_yesterday),
         )
         .route("/admin/export/l2/now", post(admin_export_l2_now))
+        .route("/agents/register", post(agents_register))
+        .route("/agents/revoke", post(agents_revoke))
+        .route("/agents/:master", get(agents_list))
         .route("/anchors", get(get_anchors))
         .route("/incidents", get(get_incidents))
         .route("/admin/incidents", post(create_incident))
@@ -710,9 +713,32 @@ async fn post_order(
         body.nonce,
         body.client_order_id.as_deref(),
     );
-    if verify_matches_async(msg, body.signature.clone(), body.address.clone())
-        .await
-        .is_err()
+    // Notional check for the agent cap: use bid notional for bids
+    // (price × qty) and quantity for asks (base being sold). This mirrors
+    // what the engine's credit system computes as the trade's notional.
+    let order_notional_micro = match body.side {
+        types::OrderSide::Bid => body
+            .price
+            .checked_mul(body.quantity)
+            .map(|n| n / 1_000_000)
+            .unwrap_or(u64::MAX),
+        types::OrderSide::Ask => body.quantity,
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    if crate::agents::verify_master_or_agent_async(
+        msg,
+        body.signature.clone(),
+        body.address.clone(),
+        order_notional_micro,
+        now_ms,
+        Arc::clone(&state.agents),
+    )
+    .await
+    .is_err()
     {
         return (
             StatusCode::UNAUTHORIZED,
@@ -1325,9 +1351,21 @@ async fn cancel_order(
     };
 
     let msg = cancel_signing_message(body.order_id, body.client_order_id.as_deref(), body.nonce);
-    if verify_matches_async(msg, body.signature.clone(), body.address.clone())
-        .await
-        .is_err()
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    // Cancels bypass the agent notional cap (pass 0).
+    if crate::agents::verify_master_or_agent_async(
+        msg,
+        body.signature.clone(),
+        body.address.clone(),
+        0,
+        now_ms,
+        Arc::clone(&state.agents),
+    )
+    .await
+    .is_err()
     {
         return (
             StatusCode::UNAUTHORIZED,
@@ -3154,6 +3192,208 @@ async fn get_points_handler(
                 "referral_multiplier": POINTS_REFERRAL_MULTIPLIER,
                 "taker_penalty": "notional * (1 - toxicity_score); fills with score > 0.5 are counted as toxic",
             },
+        }))),
+    )
+        .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Session keys / agent wallets.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct AgentRegisterBody {
+    /// Master wallet delegating trading authority.
+    master: String,
+    /// Ephemeral agent wallet the master is authorizing.
+    agent: String,
+    /// Unix ms after which the delegation is no longer valid.
+    expires_at_ms: u64,
+    /// USDC × 1e6 cap per individual order this agent may submit.
+    max_notional_per_order: u64,
+    /// Registration nonce (dedupes replays of the same signed message).
+    nonce: u64,
+    /// 65-byte ECDSA signature by `master` over
+    /// `vela:agent:register:0x{agent}:{expires_at_ms}:{max_notional}:{nonce}`.
+    signature: String,
+}
+
+async fn agents_register(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<AgentRegisterBody>,
+) -> impl IntoResponse {
+    let agent_id = match UserId::from_hex(&body.agent) {
+        Ok(a) => a,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid agent address")),
+            )
+                .into_response()
+        }
+    };
+    let master_id = match UserId::from_hex(&body.master) {
+        Ok(m) => m,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid master address")),
+            )
+                .into_response()
+        }
+    };
+
+    let msg = crate::agents::delegation_signing_message(
+        &agent_id,
+        body.expires_at_ms,
+        body.max_notional_per_order,
+        body.nonce,
+    );
+    if crate::auth::verify_matches_async(msg, body.signature.clone(), body.master.clone())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err(
+                "master signature did not match delegation payload",
+            )),
+        )
+            .into_response();
+    }
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    if body.expires_at_ms <= now_ms {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err(
+                "expires_at_ms must be in the future",
+            )),
+        )
+            .into_response();
+    }
+    if body.max_notional_per_order == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("max_notional_per_order must be > 0")),
+        )
+            .into_response();
+    }
+
+    state.agents.register(crate::agents::AgentDelegation {
+        master: master_id,
+        agent: agent_id,
+        expires_at_ms: body.expires_at_ms,
+        max_notional_per_order: body.max_notional_per_order,
+        revoked: false,
+        nonce: body.nonce,
+    });
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "agent": body.agent.to_lowercase(),
+            "master": body.master.to_lowercase(),
+            "expires_at_ms": body.expires_at_ms,
+        }))),
+    )
+        .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct AgentRevokeBody {
+    master: String,
+    agent: String,
+    nonce: u64,
+    /// 65-byte ECDSA signature by `master` over
+    /// `vela:agent:revoke:0x{agent}:{nonce}`.
+    signature: String,
+}
+
+async fn agents_revoke(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<AgentRevokeBody>,
+) -> impl IntoResponse {
+    let agent_id = match UserId::from_hex(&body.agent) {
+        Ok(a) => a,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid agent address")),
+            )
+                .into_response()
+        }
+    };
+
+    let msg = crate::agents::revocation_signing_message(&agent_id, body.nonce);
+    if crate::auth::verify_matches_async(msg, body.signature.clone(), body.master.clone())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err(
+                "master signature did not match revocation payload",
+            )),
+        )
+            .into_response();
+    }
+
+    let removed = state.agents.revoke(&agent_id);
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "agent": body.agent.to_lowercase(),
+            "revoked": removed,
+        }))),
+    )
+        .into_response()
+}
+
+async fn agents_list(
+    Path(master): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let master_id = match UserId::from_hex(&master) {
+        Ok(m) => m,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid master address")),
+            )
+                .into_response()
+        }
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let agents: Vec<serde_json::Value> = state
+        .agents
+        .agents_for(&master_id)
+        .into_iter()
+        .map(|d| {
+            let active = !d.revoked && d.expires_at_ms > now_ms;
+            serde_json::json!({
+                "agent": format!("0x{}", hex::encode(d.agent.0)),
+                "expires_at_ms": d.expires_at_ms,
+                "max_notional_per_order": d.max_notional_per_order,
+                "revoked": d.revoked,
+                "active": active,
+                "nonce": d.nonce,
+            })
+        })
+        .collect();
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "master": master.to_lowercase(),
+            "agents": agents,
         }))),
     )
         .into_response()

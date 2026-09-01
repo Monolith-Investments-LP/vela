@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod anchor;
 pub mod auth;
 pub mod committee_handler;
@@ -85,6 +86,9 @@ pub struct AppState {
     pub decryption_proofs: Arc<Mutex<Vec<::types::DecryptionProof>>>,
     /// Live batch-dispatcher metrics (batch_size histogram, latency, ops/sec).
     pub batch_metrics: Arc<BatchMetrics>,
+    /// Session-key / agent-wallet registry. Master wallets delegate to
+    /// ephemeral agents so users skip personal_sign on every order.
+    pub agents: Arc<crate::agents::AgentRegistry>,
     /// Admin bearer token — read from ADMIN_TOKEN at boot and used in
     /// constant-time comparisons via `AppState::verify_admin_token`.
     admin_token: String,
@@ -248,6 +252,7 @@ impl AppState {
             committee_config,
             decryption_proofs: Arc::new(Mutex::new(Vec::new())),
             batch_metrics: Arc::clone(&batch_metrics),
+            agents: crate::agents::AgentRegistry::new(),
             admin_token,
         });
 
