@@ -127,6 +127,17 @@ fn sign_withdrawal_op(
     Ok(format!("0x{}", hex::encode(&eth_sig)))
 }
 
+/// Maximum time we wait for the sharded matching engine to return a
+/// dispatched request's response before giving up on the client.
+/// Overridable via `VELA_DISPATCH_TIMEOUT_MS` at boot.
+fn dispatch_timeout() -> std::time::Duration {
+    let ms: u64 = std::env::var("VELA_DISPATCH_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(500);
+    std::time::Duration::from_millis(ms)
+}
+
 fn parse_hex_address(s: &str) -> Result<[u8; 20], String> {
     let trimmed = s.strip_prefix("0x").unwrap_or(s);
     let bytes = hex::decode(trimmed).map_err(|_| format!("invalid hex address: {s}"))?;
@@ -449,9 +460,10 @@ async fn post_order(
     if state.order_tx.send(channel_item).await.is_err() {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
     }
-    let responses = match resp_rx.await {
-        Ok(r) => r,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
+    let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
+        Err(_) => return (StatusCode::GATEWAY_TIMEOUT, Json(ApiResponse::<()>::err("engine dispatch timed out"))).into_response(),
     };
 
     state.feeds.lock().await.dispatch_response_batch(&user, &responses);
@@ -922,9 +934,10 @@ async fn cancel_order(
     if state.order_tx.send(channel_item).await.is_err() {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
     }
-    let responses = match resp_rx.await {
-        Ok(r) => r,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
+    let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
+        Err(_) => return (StatusCode::GATEWAY_TIMEOUT, Json(ApiResponse::<()>::err("engine dispatch timed out"))).into_response(),
     };
 
     state.feeds.lock().await.dispatch_response_batch(&user, &responses);
@@ -994,9 +1007,10 @@ async fn initiate_withdrawal(
     if state.order_tx.send(channel_item).await.is_err() {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
     }
-    let responses = match resp_rx.await {
-        Ok(r) => r,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
+    let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
+        Err(_) => return (StatusCode::GATEWAY_TIMEOUT, Json(ApiResponse::<()>::err("engine dispatch timed out"))).into_response(),
     };
 
     state.feeds.lock().await.dispatch_response_batch(&user, &responses);
@@ -1086,9 +1100,10 @@ async fn deposit_handler(
     if state.order_tx.send(channel_item).await.is_err() {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
     }
-    let responses = match resp_rx.await {
-        Ok(r) => r,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
+    let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
+        Err(_) => return (StatusCode::GATEWAY_TIMEOUT, Json(ApiResponse::<()>::err("engine dispatch timed out"))).into_response(),
     };
 
     state.feeds.lock().await.dispatch_response_batch(&user, &responses);
@@ -1308,9 +1323,10 @@ async fn force_include_handler(
     if state.order_tx.send(channel_item).await.is_err() {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
     }
-    let responses = match resp_rx.await {
-        Ok(r) => r,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
+    let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
+        Err(_) => return (StatusCode::GATEWAY_TIMEOUT, Json(ApiResponse::<()>::err("engine dispatch timed out"))).into_response(),
     };
 
     state
