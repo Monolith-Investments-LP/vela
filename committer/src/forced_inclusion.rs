@@ -46,7 +46,9 @@ pub struct DelayedInbox {
 
 impl DelayedInbox {
     pub fn new() -> Self {
-        DelayedInbox { queue: VecDeque::new() }
+        DelayedInbox {
+            queue: VecDeque::new(),
+        }
     }
 
     /// Add a transaction to the delayed inbox using the current wall-clock time
@@ -63,13 +65,12 @@ impl DelayedInbox {
     ///
     /// Primarily used for testing (to simulate entries that were submitted in
     /// the past and are therefore already eligible).
-    pub fn submit_forced_at(
-        &mut self,
-        request: Request,
-        from: UserId,
-        submitted_at: SystemTime,
-    ) {
-        self.queue.push_back(ForcedEntry { request, from, submitted_at });
+    pub fn submit_forced_at(&mut self, request: Request, from: UserId, submitted_at: SystemTime) {
+        self.queue.push_back(ForcedEntry {
+            request,
+            from,
+            submitted_at,
+        });
     }
 
     /// Push a pre-built `ForcedEntry` (used by the committer when draining the

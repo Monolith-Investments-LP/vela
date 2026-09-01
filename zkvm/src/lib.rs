@@ -1,10 +1,10 @@
-pub mod prover;
 pub mod optimistic;
+pub mod prover;
 
-pub use prover::{ZkvmInput, ZkvmOutput, execute_stf, verify_execution};
 pub use optimistic::{
     ChallengeStatus, OptimisticProver, ProofStatus as ChallengeProofStatus, CHALLENGE_WINDOW_SECS,
 };
+pub use prover::{execute_stf, verify_execution, ZkvmInput, ZkvmOutput};
 
 use serde::{Deserialize, Serialize};
 use std::future::Future;

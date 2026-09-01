@@ -1,9 +1,9 @@
-use engine::{MatchingEngine, MarketShards, UserState};
+use engine::{MarketShards, MatchingEngine, UserState};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use types::{
-    AssetId, DepositRequest, FeeConfig, Market, MarketId, OrderSide, OrderType,
-    PostOrderRequest, Request, UserId,
+    AssetId, DepositRequest, FeeConfig, Market, MarketId, OrderSide, OrderType, PostOrderRequest,
+    Request, UserId,
 };
 
 fn make_user(id: u8) -> UserId {
@@ -98,20 +98,39 @@ async fn test_cross_market_isolation() {
 
     let responses = resp_rx.await.unwrap();
     assert!(
-        responses.iter().any(|r| matches!(r, types::Response::OrderPosted(_))),
+        responses
+            .iter()
+            .any(|r| matches!(r, types::Response::OrderPosted(_))),
         "Expected OrderPosted response"
     );
 
     // Check ETH-USDC shard has the order
-    let eth_shard = shards.shards.get(&MarketId("ETH-USDC".to_string())).unwrap();
+    let eth_shard = shards
+        .shards
+        .get(&MarketId("ETH-USDC".to_string()))
+        .unwrap();
     let eth_locked = eth_shard.lock().await;
-    let eth_book = eth_locked.engine.order_books.get(&MarketId("ETH-USDC".to_string())).unwrap();
-    assert!(!eth_book.all_orders().is_empty(), "ETH-USDC should have resting order");
+    let eth_book = eth_locked
+        .engine
+        .order_books
+        .get(&MarketId("ETH-USDC".to_string()))
+        .unwrap();
+    assert!(
+        !eth_book.all_orders().is_empty(),
+        "ETH-USDC should have resting order"
+    );
 
     // Check BTC-USDC shard has no orders
-    let btc_shard = shards.shards.get(&MarketId("BTC-USDC".to_string())).unwrap();
+    let btc_shard = shards
+        .shards
+        .get(&MarketId("BTC-USDC".to_string()))
+        .unwrap();
     let btc_locked = btc_shard.lock().await;
-    let btc_book = btc_locked.engine.order_books.get(&MarketId("BTC-USDC".to_string())).unwrap();
+    let btc_book = btc_locked
+        .engine
+        .order_books
+        .get(&MarketId("BTC-USDC".to_string()))
+        .unwrap();
     assert!(btc_book.all_orders().is_empty(), "BTC-USDC should be empty");
 
     let _ = result;
@@ -150,7 +169,7 @@ async fn test_cross_market_balance_constraint() {
             market: MarketId("ETH-USDC".to_string()),
             side: OrderSide::Bid,
             order_type: OrderType::GoodTillCanceled,
-            price: 100_000_000,     // $1.00
+            price: 100_000_000,       // $1.00
             quantity: 60_000_000_000, // 600 base units → notional = 60_000_000_000 (600 USDC)
             nonce: 1,
             client_order_id: None,
@@ -167,7 +186,7 @@ async fn test_cross_market_balance_constraint() {
             market: MarketId("BTC-USDC".to_string()),
             side: OrderSide::Bid,
             order_type: OrderType::GoodTillCanceled,
-            price: 100_000_000,     // $1.00
+            price: 100_000_000,       // $1.00
             quantity: 60_000_000_000, // 600 base units → notional = 60_000_000_000 (600 USDC)
             nonce: 2,
             client_order_id: None,
@@ -190,8 +209,12 @@ async fn test_cross_market_balance_constraint() {
     let resp1 = rx1.await.unwrap();
     let resp2 = rx2.await.unwrap();
 
-    let ok1 = resp1.iter().any(|r| matches!(r, types::Response::OrderPosted(_)));
-    let ok2 = resp2.iter().any(|r| matches!(r, types::Response::OrderPosted(_)));
+    let ok1 = resp1
+        .iter()
+        .any(|r| matches!(r, types::Response::OrderPosted(_)));
+    let ok2 = resp2
+        .iter()
+        .any(|r| matches!(r, types::Response::OrderPosted(_)));
     let err1 = resp1.iter().any(|r| matches!(r, types::Response::Error(_)));
     let err2 = resp2.iter().any(|r| matches!(r, types::Response::Error(_)));
 
@@ -306,9 +329,20 @@ async fn test_concurrent_fill_determinism() {
     assert_eq!(fills.len(), 1, "Taker should receive exactly one fill");
 
     // The remaining maker's order should still be in the book
-    let shard = shards.shards.get(&MarketId("ETH-USDC".to_string())).unwrap();
+    let shard = shards
+        .shards
+        .get(&MarketId("ETH-USDC".to_string()))
+        .unwrap();
     let shard_locked = shard.lock().await;
-    let book = shard_locked.engine.order_books.get(&MarketId("ETH-USDC".to_string())).unwrap();
+    let book = shard_locked
+        .engine
+        .order_books
+        .get(&MarketId("ETH-USDC".to_string()))
+        .unwrap();
     let remaining_orders = book.all_orders();
-    assert_eq!(remaining_orders.len(), 1, "One maker order should remain in book");
+    assert_eq!(
+        remaining_orders.len(),
+        1,
+        "One maker order should remain in book"
+    );
 }

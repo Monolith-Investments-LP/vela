@@ -1,12 +1,12 @@
+use crate::batch::CommitBatch;
+use crate::committer::{CommitResult, Committer, CommitterConfig};
+use crate::da::DataAvailabilityClient;
+use crate::forced_inclusion::ForcedEntry;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use types::UserId;
-use crate::batch::CommitBatch;
-use crate::committer::{CommitResult, Committer, CommitterConfig};
-use crate::da::DataAvailabilityClient;
-use crate::forced_inclusion::ForcedEntry;
 
 pub struct CommitterHandle {
     tx: mpsc::Sender<CommitBatch>,
@@ -80,11 +80,16 @@ impl CommitterHandle {
     }
 
     pub async fn send_batch(&self, batch: CommitBatch) -> anyhow::Result<()> {
-        self.tx.send(batch).await.map_err(|_| anyhow::anyhow!("committer channel closed"))
+        self.tx
+            .send(batch)
+            .await
+            .map_err(|_| anyhow::anyhow!("committer channel closed"))
     }
 
     pub fn try_send_batch(&self, batch: CommitBatch) -> anyhow::Result<()> {
-        self.tx.try_send(batch).map_err(|e| anyhow::anyhow!("committer send failed: {}", e))
+        self.tx
+            .try_send(batch)
+            .map_err(|e| anyhow::anyhow!("committer send failed: {}", e))
     }
 
     /// Submit a forced-inclusion request, bypassing the operator.
@@ -92,11 +97,7 @@ impl CommitterHandle {
     /// The request is queued in the delayed inbox and will be prepended to the
     /// next committed batch once `CommitterConfig::forced_inclusion_timeout` has
     /// elapsed.
-    pub async fn force_include(
-        &self,
-        request: types::Request,
-        from: UserId,
-    ) -> anyhow::Result<()> {
+    pub async fn force_include(&self, request: types::Request, from: UserId) -> anyhow::Result<()> {
         let entry = ForcedEntry {
             request,
             from,
@@ -138,8 +139,16 @@ pub fn make_commit_batch(
     CommitBatch::new(
         sequence,
         ts,
-        engine.snapshot_balances().iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-        engine.snapshot_metadata().iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        engine
+            .snapshot_balances()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        engine
+            .snapshot_metadata()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
         requests,
         engine.markets.keys().cloned().collect(),
     )

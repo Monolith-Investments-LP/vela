@@ -1,14 +1,16 @@
-use std::collections::HashSet;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use crate::auth::{
+    auth_signing_message, generate_nonce, verify_matches_async, ws_auth_signing_message,
+};
+use crate::types::{format_amount, WsClientMessage, WsEnvelope, WsServerMessage};
+use crate::AppState;
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
+use std::collections::HashSet;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use types::{MarketId, PRICE_DECIMALS, QUANTITY_DECIMALS};
-use crate::AppState;
-use crate::auth::{auth_signing_message, generate_nonce, verify_matches_async, ws_auth_signing_message};
-use crate::types::{WsClientMessage, WsEnvelope, WsServerMessage, format_amount};
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -18,7 +20,8 @@ fn now_ms() -> u64 {
 }
 
 fn next_ws_seq(state: &AppState, channel: &str) -> u64 {
-    let entry = state.ws_seqs
+    let entry = state
+        .ws_seqs
         .entry(channel.to_string())
         .or_insert_with(|| std::sync::atomic::AtomicU64::new(0));
     entry.fetch_add(1, Ordering::Relaxed) + 1
@@ -38,7 +41,9 @@ pub async fn run_background_task(state: Arc<AppState>) {
         type RawBookEntry = (String, Vec<RawLevel>, Vec<RawLevel>);
         let raw_book_data: Vec<RawBookEntry> = {
             let engine = state.engine.lock().await;
-            engine.markets.keys()
+            engine
+                .markets
+                .keys()
                 .filter_map(|market_id| {
                     let book = engine.order_books.get(market_id)?;
                     let bids = book.depth_bids(50);
@@ -49,13 +54,26 @@ pub async fn run_background_task(state: Arc<AppState>) {
         };
         // Lock released — serialize outside.
         type BookEntry = (String, Vec<[String; 2]>, Vec<[String; 2]>);
-        let book_data: Vec<BookEntry> = raw_book_data.into_iter()
+        let book_data: Vec<BookEntry> = raw_book_data
+            .into_iter()
             .map(|(market_id, bids_raw, asks_raw)| {
-                let bids = bids_raw.iter()
-                    .map(|(p, q)| [format_amount(*p, PRICE_DECIMALS), format_amount(*q, QUANTITY_DECIMALS)])
+                let bids = bids_raw
+                    .iter()
+                    .map(|(p, q)| {
+                        [
+                            format_amount(*p, PRICE_DECIMALS),
+                            format_amount(*q, QUANTITY_DECIMALS),
+                        ]
+                    })
                     .collect();
-                let asks = asks_raw.iter()
-                    .map(|(p, q)| [format_amount(*p, PRICE_DECIMALS), format_amount(*q, QUANTITY_DECIMALS)])
+                let asks = asks_raw
+                    .iter()
+                    .map(|(p, q)| {
+                        [
+                            format_amount(*p, PRICE_DECIMALS),
+                            format_amount(*q, QUANTITY_DECIMALS),
+                        ]
+                    })
                     .collect();
                 (market_id, bids, asks)
             })
@@ -76,32 +94,46 @@ pub async fn run_background_task(state: Arc<AppState>) {
 
         if markets_counter.is_multiple_of(5) {
             // Copy raw market summary data under the lock; release before JSON serialization.
-            type RawSummary = (String, String, String, Option<u64>, Option<u64>, Option<u64>);
+            type RawSummary = (
+                String,
+                String,
+                String,
+                Option<u64>,
+                Option<u64>,
+                Option<u64>,
+            );
             let raw_summaries: Vec<RawSummary> = {
                 let engine = state.engine.lock().await;
-                engine.markets.values().map(|m| {
-                    let book = engine.order_books.get(&m.id);
-                    (
-                        m.id.0.clone(),
-                        m.base.as_str().to_string(),
-                        m.quote.as_str().to_string(),
-                        book.and_then(|b| b.best_bid()),
-                        book.and_then(|b| b.best_ask()),
-                        book.and_then(|b| b.spread()),
-                    )
-                }).collect()
+                engine
+                    .markets
+                    .values()
+                    .map(|m| {
+                        let book = engine.order_books.get(&m.id);
+                        (
+                            m.id.0.clone(),
+                            m.base.as_str().to_string(),
+                            m.quote.as_str().to_string(),
+                            book.and_then(|b| b.best_bid()),
+                            book.and_then(|b| b.best_ask()),
+                            book.and_then(|b| b.spread()),
+                        )
+                    })
+                    .collect()
             };
             // Lock released — serialize outside.
-            let summaries: Vec<serde_json::Value> = raw_summaries.into_iter().map(|(id, base, quote, best_bid, best_ask, spread)| {
-                serde_json::json!({
-                    "id": id,
-                    "base": base,
-                    "quote": quote,
-                    "best_bid": best_bid.map(|p| format_amount(p, PRICE_DECIMALS)),
-                    "best_ask": best_ask.map(|p| format_amount(p, PRICE_DECIMALS)),
-                    "spread": spread.map(|s| format_amount(s, PRICE_DECIMALS)),
+            let summaries: Vec<serde_json::Value> = raw_summaries
+                .into_iter()
+                .map(|(id, base, quote, best_bid, best_ask, spread)| {
+                    serde_json::json!({
+                        "id": id,
+                        "base": base,
+                        "quote": quote,
+                        "best_bid": best_bid.map(|p| format_amount(p, PRICE_DECIMALS)),
+                        "best_ask": best_ask.map(|p| format_amount(p, PRICE_DECIMALS)),
+                        "spread": spread.map(|s| format_amount(s, PRICE_DECIMALS)),
+                    })
                 })
-            }).collect();
+                .collect();
             let channel = "markets".to_string();
             let seq = next_ws_seq(&state, &channel);
             let envelope = WsEnvelope {
@@ -275,18 +307,34 @@ async fn handle_client_message(
             vec![serde_json::to_string(&WsServerMessage::Challenge { nonce }).unwrap_or_default()]
         }
 
-        WsClientMessage::Auth { address, signature, nonce, timestamp } => {
+        WsClientMessage::Auth {
+            address,
+            signature,
+            nonce,
+            timestamp,
+        } => {
             if let Some(ts) = timestamp {
                 handle_timestamp_auth(
-                    address, signature, ts,
-                    state, account_rx, subscribed_channels,
-                ).await
+                    address,
+                    signature,
+                    ts,
+                    state,
+                    account_rx,
+                    subscribed_channels,
+                )
+                .await
             } else {
                 let nonce_str = nonce.unwrap_or_default();
                 handle_challenge_auth(
-                    address, signature, nonce_str,
-                    state, authenticated_user, private_rx, pending_nonce,
-                ).await
+                    address,
+                    signature,
+                    nonce_str,
+                    state,
+                    authenticated_user,
+                    private_rx,
+                    pending_nonce,
+                )
+                .await
             }
         }
 
@@ -304,11 +352,25 @@ async fn handle_client_message(
                     if let Some(market_str) = channel.strip_prefix("book.") {
                         let market = MarketId(market_str.to_string());
                         if let Some(book) = engine.order_books.get(&market) {
-                            let bids = book.depth_bids(20).iter()
-                                .map(|(p, q)| [format_amount(*p, PRICE_DECIMALS), format_amount(*q, QUANTITY_DECIMALS)])
+                            let bids = book
+                                .depth_bids(20)
+                                .iter()
+                                .map(|(p, q)| {
+                                    [
+                                        format_amount(*p, PRICE_DECIMALS),
+                                        format_amount(*q, QUANTITY_DECIMALS),
+                                    ]
+                                })
                                 .collect();
-                            let asks = book.depth_asks(20).iter()
-                                .map(|(p, q)| [format_amount(*p, PRICE_DECIMALS), format_amount(*q, QUANTITY_DECIMALS)])
+                            let asks = book
+                                .depth_asks(20)
+                                .iter()
+                                .map(|(p, q)| {
+                                    [
+                                        format_amount(*p, PRICE_DECIMALS),
+                                        format_amount(*q, QUANTITY_DECIMALS),
+                                    ]
+                                })
                                 .collect();
                             let snap = WsServerMessage::BookSnapshot {
                                 market: market_str.to_string(),
@@ -320,11 +382,25 @@ async fn handle_client_message(
                     } else if let Some(market_str) = channel.strip_prefix("orderbook:") {
                         let market = MarketId(market_str.to_string());
                         if let Some(book) = engine.order_books.get(&market) {
-                            let bids: Vec<[String; 2]> = book.depth_bids(50).iter()
-                                .map(|(p, q)| [format_amount(*p, PRICE_DECIMALS), format_amount(*q, QUANTITY_DECIMALS)])
+                            let bids: Vec<[String; 2]> = book
+                                .depth_bids(50)
+                                .iter()
+                                .map(|(p, q)| {
+                                    [
+                                        format_amount(*p, PRICE_DECIMALS),
+                                        format_amount(*q, QUANTITY_DECIMALS),
+                                    ]
+                                })
                                 .collect();
-                            let asks: Vec<[String; 2]> = book.depth_asks(50).iter()
-                                .map(|(p, q)| [format_amount(*p, PRICE_DECIMALS), format_amount(*q, QUANTITY_DECIMALS)])
+                            let asks: Vec<[String; 2]> = book
+                                .depth_asks(50)
+                                .iter()
+                                .map(|(p, q)| {
+                                    [
+                                        format_amount(*p, PRICE_DECIMALS),
+                                        format_amount(*q, QUANTITY_DECIMALS),
+                                    ]
+                                })
                                 .collect();
                             let seq = next_ws_seq(state, channel);
                             let envelope = WsEnvelope {
@@ -337,7 +413,8 @@ async fn handle_client_message(
                             responses.push(serde_json::to_string(&envelope).unwrap_or_default());
                         }
                     } else if let Some(market_str) = channel.strip_prefix("trades:") {
-                        let recent: Vec<_> = fills.iter()
+                        let recent: Vec<_> = fills
+                            .iter()
                             .filter(|f| f.market_id == market_str)
                             .rev()
                             .take(20)
@@ -488,18 +565,24 @@ async fn handle_timestamp_auth(
 
             let (balances, orders) = {
                 let engine = state.engine.lock().await;
-                let bals: Vec<serde_json::Value> = engine.balances.iter()
+                let bals: Vec<serde_json::Value> = engine
+                    .balances
+                    .iter()
                     .filter(|((u, _), _)| u == &user)
-                    .map(|((_, asset), bal)| serde_json::json!({
-                        "asset": asset.as_str(),
-                        "available": crate::types::format_amount(bal.available, 8),
-                        "locked": crate::types::format_amount(bal.locked, 8),
-                        "total": crate::types::format_amount(bal.total(), 8),
-                    }))
+                    .map(|((_, asset), bal)| {
+                        serde_json::json!({
+                            "asset": asset.as_str(),
+                            "available": crate::types::format_amount(bal.available, 8),
+                            "locked": crate::types::format_amount(bal.locked, 8),
+                            "total": crate::types::format_amount(bal.total(), 8),
+                        })
+                    })
                     .collect();
 
                 let meta = engine.metadata.get(&user);
-                let open_ids = meta.map(|m| m.iter_order_ids().collect::<Vec<_>>()).unwrap_or_default();
+                let open_ids = meta
+                    .map(|m| m.iter_order_ids().collect::<Vec<_>>())
+                    .unwrap_or_default();
                 let ords: Vec<serde_json::Value> = engine.order_books.values()
                     .flat_map(|book| {
                         open_ids.iter().filter_map(|&id| {

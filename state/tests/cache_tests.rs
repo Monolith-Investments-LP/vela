@@ -1,12 +1,25 @@
-use state::{StateCache, StateKey, MptStore, StateManager};
+use state::{MptStore, StateCache, StateKey, StateManager};
 use types::{AssetId, Balance, MarketId, UserId, UserMetadata};
 
-fn user(i: u8) -> UserId { let mut a = [0u8; 20]; a[19] = i; UserId(a) }
-fn usdc() -> AssetId { AssetId::from_str("USDC") }
-fn btc() -> AssetId { AssetId::from_str("BTC") }
+fn user(i: u8) -> UserId {
+    let mut a = [0u8; 20];
+    a[19] = i;
+    UserId(a)
+}
+fn usdc() -> AssetId {
+    AssetId::from_str("USDC")
+}
+fn btc() -> AssetId {
+    AssetId::from_str("BTC")
+}
 
 fn balance(user: UserId, asset: AssetId, available: u64, locked: u64) -> Balance {
-    Balance { user, asset, available, locked }
+    Balance {
+        user,
+        asset,
+        available,
+        locked,
+    }
 }
 
 #[test]
@@ -113,9 +126,14 @@ fn test_sequence_tracking() {
 #[test]
 fn test_state_key_encode_decode_roundtrip() {
     let keys = vec![
-        StateKey::Balance { user: user(1), asset: usdc() },
+        StateKey::Balance {
+            user: user(1),
+            asset: usdc(),
+        },
         StateKey::Metadata { user: user(2) },
-        StateKey::MarketConfig { market: MarketId::new("BTC", "USDC") },
+        StateKey::MarketConfig {
+            market: MarketId::new("BTC", "USDC"),
+        },
         StateKey::GlobalSequence,
     ];
     for key in &keys {
@@ -156,9 +174,12 @@ fn test_mpt_snapshot_roundtrip() {
 
 #[test]
 fn test_state_manager_commit_batch() {
-    use std::collections::HashMap;
     use engine::MatchingEngine;
-    use types::{DepositRequest, FeeConfig, Market, PostOrderRequest, OrderSide, OrderType, Request, PRICE_SCALE, QUANTITY_SCALE};
+    use std::collections::HashMap;
+    use types::{
+        DepositRequest, FeeConfig, Market, OrderSide, OrderType, PostOrderRequest, Request,
+        PRICE_SCALE, QUANTITY_SCALE,
+    };
 
     let mut engine = MatchingEngine::new(FeeConfig::default(), 1.0);
     engine.add_market(Market {
@@ -174,18 +195,18 @@ fn test_state_manager_commit_batch() {
     });
 
     let u = user(1);
-    engine.process(Request::Deposit(DepositRequest {
-        user: u.clone(),
-        asset: usdc(),
-        amount: 100_000 * PRICE_SCALE,
-        l1_tx_hash: [0u8; 32],
-    }), 1);
+    engine.process(
+        Request::Deposit(DepositRequest {
+            user: u.clone(),
+            asset: usdc(),
+            amount: 100_000 * PRICE_SCALE,
+            l1_tx_hash: [0u8; 32],
+        }),
+        1,
+    );
 
     let mut manager = StateManager::new(None);
-    let root = manager.commit_batch(
-        engine.snapshot_balances(),
-        engine.snapshot_metadata(),
-    );
+    let root = manager.commit_batch(engine.snapshot_balances(), engine.snapshot_metadata());
 
     assert_ne!(root, [0u8; 32]);
     assert_eq!(manager.batch_sequence, 1);

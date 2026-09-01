@@ -1,16 +1,16 @@
+use crate::batch::CommitBatch;
+use crate::da::{DaRecord, DataAvailabilityClient};
+use crate::forced_inclusion::{DelayedInbox, ForcedEntry};
+use state::mpt::Hash;
+use state::StateManager;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{info, warn};
-use state::StateManager;
-use state::mpt::Hash;
 use types::Request;
 use zkvm::{BatchProof, ProofRequest, ZkProver};
-use crate::batch::CommitBatch;
-use crate::da::{DaRecord, DataAvailabilityClient};
-use crate::forced_inclusion::{DelayedInbox, ForcedEntry};
 
 // ---------------------------------------------------------------------------
 // Payload serialized to the DA layer for each committed batch.
@@ -156,7 +156,8 @@ impl Committer {
             self.pending_requests.push(request);
         }
         for ((user, asset), balance) in &batch.balances {
-            self.state_manager.observe_balance_change(user, asset, balance);
+            self.state_manager
+                .observe_balance_change(user, asset, balance);
         }
         for meta in batch.metadata.values() {
             self.state_manager.observe_metadata_change(meta);
@@ -175,7 +176,9 @@ impl Committer {
             self.inbox.push(entry);
         }
 
-        let forced = self.inbox.drain_eligible(self.config.forced_inclusion_timeout);
+        let forced = self
+            .inbox
+            .drain_eligible(self.config.forced_inclusion_timeout);
         let count = forced.len();
 
         if count > 0 {
@@ -183,7 +186,10 @@ impl Committer {
             let normal = std::mem::take(&mut self.pending_requests);
             self.pending_requests = forced;
             self.pending_requests.extend(normal);
-            info!(count = count, "forced-inclusion transactions prepended to batch");
+            info!(
+                count = count,
+                "forced-inclusion transactions prepended to batch"
+            );
         }
 
         count
@@ -200,7 +206,8 @@ impl Committer {
         let snapshot = self.state_manager.take_snapshot();
         let requests_for_da = self.pending_requests.clone();
 
-        let state_root_before = self.prev_root
+        let state_root_before = self
+            .prev_root
             .map(|r| format!("0x{}", hex::encode(r)))
             .unwrap_or_else(|| format!("0x{}", "0".repeat(64)));
 
@@ -266,7 +273,12 @@ impl Committer {
     ) -> Option<DaRecord> {
         let client = self.da_client.as_ref()?;
 
-        let payload = DaBatch { sequence, root, snapshot, requests };
+        let payload = DaBatch {
+            sequence,
+            root,
+            snapshot,
+            requests,
+        };
         let data = match serde_json::to_vec(&payload) {
             Ok(b) => b,
             Err(e) => {
@@ -283,7 +295,10 @@ impl Committer {
                     hash = hex::encode(receipt.content_hash),
                     "batch posted to DA"
                 );
-                Some(DaRecord { receipt, backend: client.name().to_string() })
+                Some(DaRecord {
+                    receipt,
+                    backend: client.name().to_string(),
+                })
             }
             Err(e) => {
                 warn!(sequence = sequence, backend = client.name(), error = %e, "DA submission failed");

@@ -28,13 +28,11 @@ contract VelaSettlementTest is Test {
         token.transfer(user, 1000e18);
     }
 
-    function _operatorSigFor(
-        VelaSettlement target,
-        address _user,
-        address asset,
-        uint256 amount,
-        uint256 nonce
-    ) internal view returns (bytes memory) {
+    function _operatorSigFor(VelaSettlement target, address _user, address asset, uint256 amount, uint256 nonce)
+        internal
+        view
+        returns (bytes memory)
+    {
         bytes32 hash = target.withdrawHash(_user, asset, amount, nonce);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(operatorKey, hash);
         return abi.encodePacked(r, s, v);
@@ -50,13 +48,13 @@ contract VelaSettlementTest is Test {
 
     function test_depositETH() public {
         vm.prank(user);
-        settlement.depositETH{value: 1 ether}();
+        settlement.depositETH{ value: 1 ether }();
         assertEq(settlement.getBalance(user, address(0)), 1 ether);
     }
 
     function test_initiateAndExecuteEmergencyExit() public {
         vm.prank(user);
-        settlement.depositETH{value: 1 ether}();
+        settlement.depositETH{ value: 1 ether }();
 
         vm.prank(user);
         settlement.initiateEmergencyExit(address(0));
@@ -73,7 +71,7 @@ contract VelaSettlementTest is Test {
 
     function test_emergencyExitRevertsBeforeTimelock() public {
         vm.prank(user);
-        settlement.depositETH{value: 1 ether}();
+        settlement.depositETH{ value: 1 ether }();
 
         vm.prank(user);
         settlement.initiateEmergencyExit(address(0));
@@ -87,7 +85,7 @@ contract VelaSettlementTest is Test {
 
     function test_withdrawWithValidSignature() public {
         vm.prank(user);
-        settlement.depositETH{value: 1 ether}();
+        settlement.depositETH{ value: 1 ether }();
 
         bytes memory sig = _operatorSig(user, address(0), 0.5 ether, 1);
 
@@ -102,7 +100,7 @@ contract VelaSettlementTest is Test {
 
     function test_withdrawRevertsInvalidSignature() public {
         vm.prank(user);
-        settlement.depositETH{value: 1 ether}();
+        settlement.depositETH{ value: 1 ether }();
 
         uint256 wrongKey = 0xBAD;
         bytes32 hash = settlement.withdrawHash(user, address(0), 0.5 ether, 1);
@@ -116,7 +114,7 @@ contract VelaSettlementTest is Test {
 
     function test_withdrawRevertsInsufficientBalance() public {
         vm.prank(user);
-        settlement.depositETH{value: 0.1 ether}();
+        settlement.depositETH{ value: 0.1 ether }();
 
         bytes memory sig = _operatorSig(user, address(0), 1 ether, 1);
 
@@ -133,7 +131,7 @@ contract VelaSettlementTest is Test {
     /// even if the user has redeposited enough to cover the second call.
     function test_replayAfterRedepositIsRejected() public {
         vm.prank(user);
-        settlement.depositETH{value: 1 ether}();
+        settlement.depositETH{ value: 1 ether }();
 
         bytes memory sig = _operatorSig(user, address(0), 0.5 ether, 1);
 
@@ -142,7 +140,7 @@ contract VelaSettlementTest is Test {
 
         // User redeposits enough to make the balance check pass a second time.
         vm.prank(user);
-        settlement.depositETH{value: 0.5 ether}();
+        settlement.depositETH{ value: 0.5 ether }();
 
         vm.prank(user);
         vm.expectRevert(VelaSettlement.NonceAlreadyUsed.selector);
@@ -153,12 +151,12 @@ contract VelaSettlementTest is Test {
     /// second deployment of the same contract on the same chain.
     function test_crossContractReplayIsRejected() public {
         vm.prank(user);
-        settlement.depositETH{value: 1 ether}();
+        settlement.depositETH{ value: 1 ether }();
 
         VelaSettlement other = new VelaSettlement(operator);
         vm.deal(user, user.balance + 1 ether);
         vm.prank(user);
-        other.depositETH{value: 1 ether}();
+        other.depositETH{ value: 1 ether }();
 
         bytes memory sigForA = _operatorSigFor(settlement, user, address(0), 0.5 ether, 42);
 
@@ -171,7 +169,7 @@ contract VelaSettlementTest is Test {
     /// OZ ECDSA reverts with a specific error inside `ECDSA.recover`.
     function test_signatureMalleabilityRejected() public {
         vm.prank(user);
-        settlement.depositETH{value: 1 ether}();
+        settlement.depositETH{ value: 1 ether }();
 
         bytes32 hash = settlement.withdrawHash(user, address(0), 0.5 ether, 1);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(operatorKey, hash);
@@ -195,7 +193,7 @@ contract VelaSettlementTest is Test {
 
         vm.deal(user, 10 ether);
         vm.prank(user);
-        settlement.depositETH{value: 4 ether}();
+        settlement.depositETH{ value: 4 ether }();
 
         bytes memory sigA = _operatorSig(user, address(0), 0.1 ether, a);
         bytes memory sigB = _operatorSig(user, address(0), 0.1 ether, b);
@@ -209,7 +207,7 @@ contract VelaSettlementTest is Test {
         assertTrue(settlement.usedWithdrawNonces(user, b));
 
         vm.prank(user);
-        settlement.depositETH{value: 0.2 ether}();
+        settlement.depositETH{ value: 0.2 ether }();
 
         vm.prank(user);
         vm.expectRevert(VelaSettlement.NonceAlreadyUsed.selector);

@@ -2,8 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use api::wal::{
-    Wal, WalCheckpoint, WalEngineStart, WalEngineStop, WalFillCreated, WalOrderPost, WalOrderProcessed,
-    CHECKPOINT, ENGINE_START, ENGINE_STOP, FILL_CREATED, ORDER_POST, ORDER_PROCESSED,
+    Wal, WalCheckpoint, WalEngineStart, WalEngineStop, WalFillCreated, WalOrderPost,
+    WalOrderProcessed, CHECKPOINT, ENGINE_START, ENGINE_STOP, FILL_CREATED, ORDER_POST,
+    ORDER_PROCESSED,
 };
 
 fn temp_wal_dir(label: &str) -> PathBuf {
@@ -100,7 +101,10 @@ async fn test_wal_write_read_roundtrip() {
 
     assert_eq!(entries.len(), 10, "expected 10 entries");
     for (i, entry) in entries.iter().enumerate() {
-        assert_eq!(entry.sequence, expected_seqs[i], "sequence mismatch at index {i}");
+        assert_eq!(
+            entry.sequence, expected_seqs[i],
+            "sequence mismatch at index {i}"
+        );
     }
 
     let post: WalOrderPost = entries[0].decode().unwrap();
@@ -235,7 +239,10 @@ async fn test_wal_segment_rotation() {
     }
 
     let seg0_entries = Wal::read_from(&dir.join("engine_wal_0000.log"), 0).unwrap();
-    assert!(!seg0_entries.is_empty(), "segment 0 should still be readable");
+    assert!(
+        !seg0_entries.is_empty(),
+        "segment 0 should still be readable"
+    );
 
     let seg1_entries = Wal::read_from(&dir.join("engine_wal_0001.log"), 0).unwrap();
     assert_eq!(seg1_entries.len(), 5, "segment 1 should have 5 entries");
@@ -331,7 +338,10 @@ async fn test_wal_replay_recovery() {
         .collect();
 
     for (expected_id, _, _, _) in &post_entries {
-        assert!(seen_ids.contains(expected_id), "order {expected_id} should be in replay");
+        assert!(
+            seen_ids.contains(expected_id),
+            "order {expected_id} should be in replay"
+        );
     }
 }
 
@@ -356,10 +366,7 @@ async fn test_wal_clean_shutdown_detection() {
     .await
     .unwrap();
 
-    assert!(
-        !Wal::was_clean_shutdown_sync(&dir),
-        "still no ENGINE_STOP"
-    );
+    assert!(!Wal::was_clean_shutdown_sync(&dir), "still no ENGINE_STOP");
 
     wal.append(
         ENGINE_STOP,

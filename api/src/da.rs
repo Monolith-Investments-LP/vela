@@ -1,7 +1,7 @@
 use sha3::{Digest, Keccak256};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 pub fn keccak256(data: &[u8]) -> [u8; 32] {
     let mut h = Keccak256::new();

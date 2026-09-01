@@ -1,8 +1,8 @@
+use crate::types::{WsEnvelope, WsServerMessage};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use types::{Response, UserId};
-use crate::types::{WsEnvelope, WsServerMessage};
 
 /// Per-channel broadcast buffer size. Overridable via
 /// `VELA_FEED_CHANNEL_SIZE` at process start. Slow subscribers that fall
@@ -99,7 +99,12 @@ impl FeedManager {
         *seq
     }
 
-    fn send_account_envelope(&mut self, user_bytes: [u8; 20], msg_type: &str, data: serde_json::Value) {
+    fn send_account_envelope(
+        &mut self,
+        user_bytes: [u8; 20],
+        msg_type: &str,
+        data: serde_json::Value,
+    ) {
         let address = format!("0x{}", hex::encode(user_bytes));
         let channel = format!("account:{}", address);
         let seq = self.next_account_seq(user_bytes);

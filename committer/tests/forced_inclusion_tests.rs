@@ -1,7 +1,7 @@
-use std::time::{Duration, SystemTime};
-use committer::{CommitterConfig, CommitterHandle, DelayedInbox};
 use committer::handle::make_commit_batch;
+use committer::{CommitterConfig, CommitterHandle, DelayedInbox};
 use engine::MatchingEngine;
+use std::time::{Duration, SystemTime};
 use types::{AssetId, DepositRequest, FeeConfig, Market, MarketId, Request, UserId, PRICE_SCALE};
 
 // ---------------------------------------------------------------------------
@@ -14,8 +14,12 @@ fn user(i: u8) -> UserId {
     UserId(a)
 }
 
-fn usdc() -> AssetId { AssetId::from_str("USDC") }
-fn btc()  -> AssetId { AssetId::from_str("BTC") }
+fn usdc() -> AssetId {
+    AssetId::from_str("USDC")
+}
+fn btc() -> AssetId {
+    AssetId::from_str("BTC")
+}
 
 fn deposit_req(u: &UserId, amount: u64) -> Request {
     Request::Deposit(DepositRequest {
@@ -67,8 +71,15 @@ fn test_forced_tx_sits_in_inbox() {
 
     // With a 1-hour timeout the freshly submitted entry is not yet eligible.
     let drained = inbox.drain_eligible(Duration::from_secs(3600));
-    assert!(drained.is_empty(), "fresh entry must not drain before timeout");
-    assert_eq!(inbox.pending_count(), 1, "entry should still be in the inbox");
+    assert!(
+        drained.is_empty(),
+        "fresh entry must not drain before timeout"
+    );
+    assert_eq!(
+        inbox.pending_count(),
+        1,
+        "entry should still be in the inbox"
+    );
 }
 
 /// A transaction submitted with a past timestamp must drain immediately when
@@ -136,19 +147,25 @@ async fn test_forced_tx_included_in_next_batch() {
     let mut handle = CommitterHandle::spawn_full(config, 64, true, None);
 
     let u = user(5);
-    handle.force_include(deposit_req(&u, 5_000), u.clone()).await.unwrap();
+    handle
+        .force_include(deposit_req(&u, 5_000), u.clone())
+        .await
+        .unwrap();
 
     // Wait for the next timer-driven commit to pick up the forced tx.
-    let result = tokio::time::timeout(
-        Duration::from_millis(500),
-        handle.next_result(),
-    )
-    .await
-    .expect("timed out waiting for commit result")
-    .expect("no CommitResult");
+    let result = tokio::time::timeout(Duration::from_millis(500), handle.next_result())
+        .await
+        .expect("timed out waiting for commit result")
+        .expect("no CommitResult");
 
-    assert!(result.forced_count >= 1, "forced tx must be counted in the result");
-    assert_eq!(result.batch_size, result.forced_count, "entire batch should be forced txs");
+    assert!(
+        result.forced_count >= 1,
+        "forced tx must be counted in the result"
+    );
+    assert_eq!(
+        result.batch_size, result.forced_count,
+        "entire batch should be forced txs"
+    );
     assert_ne!(result.root, [0u8; 32]);
 
     handle.abort();
@@ -168,24 +185,27 @@ async fn test_normal_tx_not_affected_by_pending_forced_tx() {
 
     // Submit a forced tx that won't drain for 1 hour.
     let u = user(6);
-    handle.force_include(deposit_req(&u, 9_999), u.clone()).await.unwrap();
+    handle
+        .force_include(deposit_req(&u, 9_999), u.clone())
+        .await
+        .unwrap();
 
     // Submit a normal batch.
     let engine = funded_engine();
     let batch = make_commit_batch(&engine, vec![], 1);
     handle.send_batch(batch).await.unwrap();
 
-    let result = tokio::time::timeout(
-        Duration::from_millis(500),
-        handle.next_result(),
-    )
-    .await
-    .expect("timed out")
-    .expect("no CommitResult");
+    let result = tokio::time::timeout(Duration::from_millis(500), handle.next_result())
+        .await
+        .expect("timed out")
+        .expect("no CommitResult");
 
     // Normal commit succeeded with no forced txs in it.
     assert_ne!(result.root, [0u8; 32], "root should be non-zero");
-    assert_eq!(result.forced_count, 0, "forced tx must not be included (timeout not reached)");
+    assert_eq!(
+        result.forced_count, 0,
+        "forced tx must not be included (timeout not reached)"
+    );
 
     handle.abort();
 }
@@ -203,23 +223,26 @@ async fn test_forced_tx_is_prepended_before_normal_txs() {
 
     // Queue a forced tx with an immediately eligible timeout.
     let u = user(7);
-    handle.force_include(deposit_req(&u, 7_777), u.clone()).await.unwrap();
+    handle
+        .force_include(deposit_req(&u, 7_777), u.clone())
+        .await
+        .unwrap();
 
     // Also send a normal batch.
     let engine = funded_engine();
     let batch = make_commit_batch(&engine, vec![], 1);
     handle.send_batch(batch).await.unwrap();
 
-    let result = tokio::time::timeout(
-        Duration::from_millis(500),
-        handle.next_result(),
-    )
-    .await
-    .expect("timed out")
-    .expect("no CommitResult");
+    let result = tokio::time::timeout(Duration::from_millis(500), handle.next_result())
+        .await
+        .expect("timed out")
+        .expect("no CommitResult");
 
     // The forced count is non-zero and the batch includes both forced and normal.
-    assert!(result.forced_count >= 1, "should have at least one forced tx");
+    assert!(
+        result.forced_count >= 1,
+        "should have at least one forced tx"
+    );
     assert_ne!(result.root, [0u8; 32]);
 
     handle.abort();

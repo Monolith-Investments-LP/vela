@@ -1,8 +1,8 @@
+use crate::prover::{verify_execution, ZkvmInput};
+use state::mpt::Hash;
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 use types::Request;
-use state::mpt::Hash;
-use crate::prover::{ZkvmInput, verify_execution};
 
 /// Challenge window: 7 days in seconds.
 pub const CHALLENGE_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
@@ -24,7 +24,10 @@ pub enum ProofStatus {
     Proven { proven_root: Hash },
     /// A challenger proved that `claimed_root` is wrong; `correct_root` is the
     /// root that honest re-execution produces.
-    Disputed { claimed_root: Hash, correct_root: Hash },
+    Disputed {
+        claimed_root: Hash,
+        correct_root: Hash,
+    },
 }
 
 /// Result returned by [`OptimisticProver::check_challenge_window`].
@@ -94,13 +97,16 @@ impl OptimisticProver {
         requests: Vec<Request>,
     ) {
         let deadline = SystemTime::now() + self.challenge_window;
-        self.batches.insert(sequence, CommittedBatch {
-            claimed_root: root,
-            snapshot,
-            requests,
-            challenge_deadline: deadline,
-            status: ProofStatus::InChallengeWindow,
-        });
+        self.batches.insert(
+            sequence,
+            CommittedBatch {
+                claimed_root: root,
+                snapshot,
+                requests,
+                challenge_deadline: deadline,
+                status: ProofStatus::InChallengeWindow,
+            },
+        );
     }
 
     /// Generate a ZK proof on demand for `sequence` (fast-finality path).
@@ -111,7 +117,9 @@ impl OptimisticProver {
     ///
     /// Returns the proven (re-computed) root.
     pub fn request_fast_finality_proof(&mut self, sequence: u64) -> anyhow::Result<Hash> {
-        let batch = self.batches.get_mut(&sequence)
+        let batch = self
+            .batches
+            .get_mut(&sequence)
             .ok_or_else(|| anyhow::anyhow!("batch {} not found", sequence))?;
 
         let input = ZkvmInput {
@@ -126,7 +134,10 @@ impl OptimisticProver {
             batch.status = ProofStatus::FastFinality { proven_root };
         } else {
             let claimed = batch.claimed_root;
-            batch.status = ProofStatus::Disputed { claimed_root: claimed, correct_root: proven_root };
+            batch.status = ProofStatus::Disputed {
+                claimed_root: claimed,
+                correct_root: proven_root,
+            };
         }
 
         Ok(proven_root)
@@ -145,7 +156,9 @@ impl OptimisticProver {
         match &batch.status {
             ProofStatus::InChallengeWindow => {
                 if SystemTime::now() < batch.challenge_deadline {
-                    ChallengeStatus::Open { deadline: batch.challenge_deadline }
+                    ChallengeStatus::Open {
+                        deadline: batch.challenge_deadline,
+                    }
                 } else {
                     ChallengeStatus::Expired
                 }
@@ -175,8 +188,8 @@ impl Default for OptimisticProver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prover::{verify_execution, ZkvmInput};
     use types::{AssetId, DepositRequest, Request, UserId};
-    use crate::prover::{ZkvmInput, verify_execution};
 
     fn user(n: u8) -> UserId {
         UserId([n; 20])
@@ -200,7 +213,10 @@ mod tests {
         let mut prover = OptimisticProver::new();
         prover.submit_batch([1u8; 32], 1, vec![], vec![]);
 
-        assert_eq!(prover.proof_status(1), Some(&ProofStatus::InChallengeWindow));
+        assert_eq!(
+            prover.proof_status(1),
+            Some(&ProofStatus::InChallengeWindow)
+        );
 
         match prover.check_challenge_window(1) {
             ChallengeStatus::Open { deadline } => {
@@ -238,9 +254,14 @@ mod tests {
         assert_eq!(proven, expected_root);
         assert_eq!(
             prover.proof_status(1),
-            Some(&ProofStatus::FastFinality { proven_root: expected_root })
+            Some(&ProofStatus::FastFinality {
+                proven_root: expected_root
+            })
         );
-        assert_eq!(prover.check_challenge_window(1), ChallengeStatus::FastFinality);
+        assert_eq!(
+            prover.check_challenge_window(1),
+            ChallengeStatus::FastFinality
+        );
     }
 
     /// Running verify_execution twice on identical inputs must produce the
@@ -259,8 +280,14 @@ mod tests {
         let out1 = verify_execution(make_input()).unwrap();
         let out2 = verify_execution(make_input()).unwrap();
 
-        assert_eq!(out1.post_root, out2.post_root, "same inputs must produce same root");
-        assert_ne!(out1.post_root, [0u8; 32], "post-root must reflect state change");
+        assert_eq!(
+            out1.post_root, out2.post_root,
+            "same inputs must produce same root"
+        );
+        assert_ne!(
+            out1.post_root, [0u8; 32],
+            "post-root must reflect state change"
+        );
     }
 
     /// A tampered pre-batch snapshot (inflated balance) must produce a
@@ -300,8 +327,7 @@ mod tests {
         .unwrap();
 
         assert_ne!(
-            out_clean.post_root,
-            out_tampered.post_root,
+            out_clean.post_root, out_tampered.post_root,
             "tampered pre-state must yield a different post-root"
         );
     }
@@ -322,7 +348,10 @@ mod tests {
         assert_ne!(proven, fraudulent_root);
 
         match prover.proof_status(1) {
-            Some(ProofStatus::Disputed { claimed_root, correct_root }) => {
+            Some(ProofStatus::Disputed {
+                claimed_root,
+                correct_root,
+            }) => {
                 assert_eq!(*claimed_root, fraudulent_root);
                 assert_eq!(*correct_root, proven);
             }

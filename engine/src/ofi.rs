@@ -30,7 +30,9 @@ pub struct OfiAccumulator {
 }
 
 impl Default for OfiAccumulator {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OfiAccumulator {
@@ -91,7 +93,9 @@ pub struct ToxicityScorer {
 
 impl ToxicityScorer {
     pub fn new() -> Self {
-        Self { accumulators: HashMap::new() }
+        Self {
+            accumulators: HashMap::new(),
+        }
     }
 
     /// Score a taker fill event and update the OFI accumulator for the market.
@@ -142,9 +146,16 @@ mod tests {
         // Alternating buyer- and seller-initiated fills of equal size.
         for _ in 0..10 {
             scorer.score_and_update(&market, 1_000_000_000, 10_000_000_000, 1_000_000_000, false);
-            scorer.score_and_update(&market, -1_000_000_000, 10_000_000_000, 1_000_000_000, false);
+            scorer.score_and_update(
+                &market,
+                -1_000_000_000,
+                10_000_000_000,
+                1_000_000_000,
+                false,
+            );
         }
-        let (score, _) = scorer.score_and_update(&market, 1_000_000_000, 10_000_000_000, 1_000_000_000, false);
+        let (score, _) =
+            scorer.score_and_update(&market, 1_000_000_000, 10_000_000_000, 1_000_000_000, false);
         // Balanced OFI → low imbalance; small fill relative to depth; no book walk.
         assert!(score < 0.15, "balanced flow score too high: {score}");
     }
@@ -157,7 +168,8 @@ mod tests {
         for _ in 0..DEFAULT_OFI_WINDOW {
             scorer.score_and_update(&market, 10_000_000_000, 500_000_000, 10_000_000_000, true);
         }
-        let (score, _) = scorer.score_and_update(&market, 10_000_000_000, 500_000_000, 10_000_000_000, true);
+        let (score, _) =
+            scorer.score_and_update(&market, 10_000_000_000, 500_000_000, 10_000_000_000, true);
         // Max OFI imbalance (1.0) + fill 20× top depth (clamped 1.0) + walked.
         // Expected: 0.5 * 1.0 + 0.3 * 1.0 + 0.2 * 1.0 = 1.0
         assert!(score > 0.9, "one-sided large walk score too low: {score}");
@@ -174,11 +186,19 @@ mod tests {
 
         // 51st push: evicts oldest +1000, inserts +1000 → sum unchanged.
         acc.push(1_000);
-        assert_eq!(acc.sum, 1_000 * DEFAULT_OFI_WINDOW as i64, "sum unchanged after same-value rollover");
+        assert_eq!(
+            acc.sum,
+            1_000 * DEFAULT_OFI_WINDOW as i64,
+            "sum unchanged after same-value rollover"
+        );
 
         // 52nd push: evicts oldest +1000, inserts -500 → sum decreases by 1500.
         acc.push(-500);
         let expected = 1_000 * (DEFAULT_OFI_WINDOW as i64 - 1) - 500;
-        assert_eq!(acc.sum, expected, "sum after mixed rollover: expected {expected}, got {}", acc.sum);
+        assert_eq!(
+            acc.sum, expected,
+            "sum after mixed rollover: expected {expected}, got {}",
+            acc.sum
+        );
     }
 }

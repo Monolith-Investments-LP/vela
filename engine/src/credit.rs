@@ -60,10 +60,13 @@ impl CreditSystem {
     /// Also evicts all already-expired penalties to bound map size.
     pub fn apply_penalty(&mut self, user: UserId, multiplier: f64, duration_us: u64, now_us: u64) {
         self.evict_expired_penalties(now_us);
-        self.penalties.insert(user, CreditPenalty {
-            expires_at: now_us.saturating_add(duration_us),
-            multiplier,
-        });
+        self.penalties.insert(
+            user,
+            CreditPenalty {
+                expires_at: now_us.saturating_add(duration_us),
+                multiplier,
+            },
+        );
     }
 
     pub fn compute_notional(price: Price, quantity: Quantity) -> u64 {
@@ -147,9 +150,13 @@ mod tests {
         // check_credit with penalty active rejects orders that would fit without penalty.
         let deposited: u64 = 1_000;
         // Without penalty: max_quoted = 1000 × 5 = 5000, so 4500 fits.
-        assert!(cs.check_credit(&user, deposited, 0, 4_500, now_us + 11_000_000).is_ok());
+        assert!(cs
+            .check_credit(&user, deposited, 0, 4_500, now_us + 11_000_000)
+            .is_ok());
         // With penalty: max_quoted = 1000 × 4 = 4000, so 4500 does not fit.
-        assert!(cs.check_credit(&user, deposited, 0, 4_500, now_us + 1_000_000).is_err());
+        assert!(cs
+            .check_credit(&user, deposited, 0, 4_500, now_us + 1_000_000)
+            .is_err());
 
         // After penalty expires: effective ratio returns to base.
         let post = cs.effective_ratio(&user, now_us + 11_000_000);

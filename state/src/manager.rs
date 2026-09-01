@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-use types::{AssetId, Balance, Request, Response, UserId, UserMetadata};
 use crate::cache::StateCache;
 use crate::keys::StateKey;
 use crate::mpt::{Hash, MptStore};
 use crate::smt::SmtStore;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use types::{AssetId, Balance, Request, Response, UserId, UserMetadata};
 
 pub struct StateManager {
     pub cache: StateCache,
@@ -47,14 +47,21 @@ impl StateManager {
 
     pub fn observe_balance_change(&mut self, user: &UserId, asset: &AssetId, balance: &Balance) {
         self.cache.set_balance(balance);
-        let key = crate::keys::StateKey::Balance { user: user.clone(), asset: *asset }.encode();
+        let key = crate::keys::StateKey::Balance {
+            user: user.clone(),
+            asset: *asset,
+        }
+        .encode();
         let val = serde_json::to_vec(balance).unwrap_or_default();
         self.smt.insert(key, val);
     }
 
     pub fn observe_metadata_change(&mut self, meta: &UserMetadata) {
         self.cache.set_metadata(meta);
-        let key = crate::keys::StateKey::Metadata { user: meta.user.clone() }.encode();
+        let key = crate::keys::StateKey::Metadata {
+            user: meta.user.clone(),
+        }
+        .encode();
         let val = serde_json::to_vec(meta).unwrap_or_default();
         self.smt.insert(key, val);
     }

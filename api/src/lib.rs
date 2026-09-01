@@ -13,20 +13,22 @@ pub mod types;
 pub mod wal;
 pub mod ws;
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use tokio::sync::Mutex;
-use engine::{BatchMetrics, MatchingEngine, MarketShards, UserState};
+use crate::committee_handler::PendingEncryptedOrders;
+use crate::types::{
+    AnchorRecord, Decision, Incident, RegisteredMM, StoredFill, StoredOrder, WsEnvelope,
+};
+use committee::ThresholdDecryptor;
 use engine::batch_dispatcher::BatchedRequest;
+use engine::{BatchMetrics, MarketShards, MatchingEngine, UserState};
 use feeds::FeedManager;
 use rate_limit::RateLimiter;
-use crate::types::{AnchorRecord, Decision, Incident, RegisteredMM, StoredFill, StoredOrder, WsEnvelope};
-use zkvm::{BatchProof, ZkProver};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 use tee::{AttestationRecord, TeeAttester};
-use committee::ThresholdDecryptor;
-use crate::committee_handler::PendingEncryptedOrders;
+use tokio::sync::Mutex;
+use zkvm::{BatchProof, ZkProver};
 
 /// Re-export so that handler modules can use a stable local name.
 pub use engine::batch_dispatcher::BatchedRequest as OrderChannelItem;
@@ -139,7 +141,10 @@ impl AppState {
             // Copy order book for this market
             if let Some(book) = engine.order_books.get(market_id) {
                 for order in book.all_orders() {
-                    let _ = shard_engine.order_books.get_mut(market_id).map(|b| b.insert_resting(order));
+                    let _ = shard_engine
+                        .order_books
+                        .get_mut(market_id)
+                        .map(|b| b.insert_resting(order));
                 }
             }
             shards_builder.add_shard(market_id.clone(), shard_engine);
@@ -175,7 +180,9 @@ impl AppState {
             .ok()
             .and_then(|v| {
                 let b = hex::decode(v.strip_prefix("0x").unwrap_or(&v)).ok()?;
-                if b.len() != 48 { return None; }
+                if b.len() != 48 {
+                    return None;
+                }
                 let mut arr = [0u8; 48];
                 arr.copy_from_slice(&b);
                 Some(arr)
@@ -189,9 +196,7 @@ impl AppState {
         });
 
         let pending_encrypted = committee_handler::new_pending_queue();
-        let threshold_decryptor = Arc::new(Mutex::new(
-            committee::ThresholdDecryptor::new(t, n),
-        ));
+        let threshold_decryptor = Arc::new(Mutex::new(committee::ThresholdDecryptor::new(t, n)));
 
         let batch_metrics = BatchMetrics::new();
 
@@ -209,7 +214,9 @@ impl AppState {
             fills: Arc::new(Mutex::new(Vec::new())),
             stored_orders: Arc::new(Mutex::new(HashMap::new())),
             order_tx,
-            da: Arc::new(da::DaSubmitter::new(Arc::new(da::LocalDaClient::new(da_dir)))),
+            da: Arc::new(da::DaSubmitter::new(Arc::new(da::LocalDaClient::new(
+                da_dir,
+            )))),
             ws_tx: Arc::new(ws_bcast_tx),
             ws_seqs: Arc::new(dashmap::DashMap::new()),
             engine_version: "0.2.0",
@@ -253,7 +260,10 @@ impl AppState {
         ));
         tokio::spawn(ws::run_background_task(Arc::clone(&state)));
         tokio::spawn(midnight_reset_task(Arc::clone(&state)));
-        tokio::spawn(committee_handler::eviction_task(pending_encrypted, Arc::clone(&state)));
+        tokio::spawn(committee_handler::eviction_task(
+            pending_encrypted,
+            Arc::clone(&state),
+        ));
 
         state
     }

@@ -20,8 +20,8 @@ use sha2::Sha256;
 use tokio::sync::Mutex;
 use types::{DecryptionShare, EncryptedOrder, G1Affine, PostOrderRequest};
 
-use engine::batch_dispatcher::BatchedRequest;
 use crate::AppState;
+use engine::batch_dispatcher::BatchedRequest;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -57,10 +57,7 @@ pub fn new_pending_queue() -> PendingEncryptedOrders {
 
 /// Background task: evict pending entries older than 500 ms and evict stale
 /// ThresholdDecryptor share entries.
-pub async fn eviction_task(
-    pending: PendingEncryptedOrders,
-    state: Arc<AppState>,
-) {
+pub async fn eviction_task(pending: PendingEncryptedOrders, state: Arc<AppState>) {
     const MAX_AGE: Duration = Duration::from_millis(500);
     let mut interval = tokio::time::interval(Duration::from_millis(100));
     loop {
@@ -98,16 +95,23 @@ impl EncryptedOrderBody {
         let r = parse_g1(&self.r).map_err(|e| format!("r: {e}"))?;
         let c = parse_g1(&self.c).map_err(|e| format!("c: {e}"))?;
         let order_hash = parse_bytes32(&self.order_hash).map_err(|e| format!("order_hash: {e}"))?;
-        let ciphertext =
-            hex::decode(self.ciphertext.strip_prefix("0x").unwrap_or(&self.ciphertext))
-                .map_err(|e| format!("ciphertext: {e}"))?;
-        Ok(EncryptedOrder { r, c, order_hash, ciphertext })
+        let ciphertext = hex::decode(
+            self.ciphertext
+                .strip_prefix("0x")
+                .unwrap_or(&self.ciphertext),
+        )
+        .map_err(|e| format!("ciphertext: {e}"))?;
+        Ok(EncryptedOrder {
+            r,
+            c,
+            order_hash,
+            ciphertext,
+        })
     }
 }
 
 fn parse_g1(s: &str) -> Result<G1Affine, String> {
-    let bytes = hex::decode(s.strip_prefix("0x").unwrap_or(s))
-        .map_err(|e| e.to_string())?;
+    let bytes = hex::decode(s.strip_prefix("0x").unwrap_or(s)).map_err(|e| e.to_string())?;
     if bytes.len() != 48 {
         return Err(format!("expected 48 bytes, got {}", bytes.len()));
     }
@@ -117,8 +121,7 @@ fn parse_g1(s: &str) -> Result<G1Affine, String> {
 }
 
 fn parse_bytes32(s: &str) -> Result<[u8; 32], String> {
-    let bytes = hex::decode(s.strip_prefix("0x").unwrap_or(s))
-        .map_err(|e| e.to_string())?;
+    let bytes = hex::decode(s.strip_prefix("0x").unwrap_or(s)).map_err(|e| e.to_string())?;
     if bytes.len() != 32 {
         return Err(format!("expected 32 bytes, got {}", bytes.len()));
     }
@@ -139,7 +142,10 @@ struct ApiOk<T: serde::Serialize> {
 }
 
 fn ok<T: serde::Serialize>(data: T) -> Json<ApiOk<T>> {
-    Json(ApiOk { success: true, data })
+    Json(ApiOk {
+        success: true,
+        data,
+    })
 }
 
 pub async fn post_encrypted_order(
@@ -205,7 +211,11 @@ pub async fn post_encrypted_order(
             received_ts_ms: now_ms,
         });
 
-    (StatusCode::OK, ok(serde_json::json!({ "order_hash": order_hash_hex, "status": "pending" }))).into_response()
+    (
+        StatusCode::OK,
+        ok(serde_json::json!({ "order_hash": order_hash_hex, "status": "pending" })),
+    )
+        .into_response()
 }
 
 // --------------------------------------------------------------------------
@@ -286,7 +296,12 @@ pub async fn post_committee_share(
     };
 
     // Authenticate.
-    if !verify_committee_auth(&headers, &body, &state.committee_keys, share_body.node_index) {
+    if !verify_committee_auth(
+        &headers,
+        &body,
+        &state.committee_keys,
+        share_body.node_index,
+    ) {
         tracing::warn!(
             node_index = share_body.node_index,
             "committee share rejected: authentication failed"
@@ -389,10 +404,15 @@ pub async fn post_committee_share(
             };
 
             if !proof.is_valid() {
-                tracing::error!("fraud detected: T_decrypt < T_recv for order {:?}", hex::encode(order_hash));
+                tracing::error!(
+                    "fraud detected: T_decrypt < T_recv for order {:?}",
+                    hex::encode(order_hash)
+                );
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": "fraud proof triggered: T_decrypt < T_recv" })),
+                    Json(
+                        serde_json::json!({ "error": "fraud proof triggered: T_decrypt < T_recv" }),
+                    ),
                 )
                     .into_response();
             }

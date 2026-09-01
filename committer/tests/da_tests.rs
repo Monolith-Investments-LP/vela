@@ -1,8 +1,8 @@
-use std::time::Duration;
-use committer::{CommitterHandle, MockDaClient};
 use committer::da::keccak256;
 use committer::handle::make_commit_batch;
+use committer::{CommitterHandle, MockDaClient};
 use engine::MatchingEngine;
+use std::time::Duration;
 use types::{AssetId, DepositRequest, FeeConfig, Market, MarketId, Request, PRICE_SCALE};
 
 // ---------------------------------------------------------------------------
@@ -14,8 +14,12 @@ fn user(i: u8) -> types::UserId {
     a[19] = i;
     types::UserId(a)
 }
-fn usdc() -> AssetId { AssetId::from_str("USDC") }
-fn btc()  -> AssetId { AssetId::from_str("BTC") }
+fn usdc() -> AssetId {
+    AssetId::from_str("USDC")
+}
+fn btc() -> AssetId {
+    AssetId::from_str("BTC")
+}
 
 fn funded_engine() -> MatchingEngine {
     let mut e = MatchingEngine::new(FeeConfig::default(), 1.0);
@@ -44,13 +48,8 @@ fn funded_engine() -> MatchingEngine {
 
 async fn commit_one(da: MockDaClient) -> committer::CommitResult {
     let da_box: Box<dyn committer::DataAvailabilityClient> = Box::new(da);
-    let mut handle = CommitterHandle::spawn_with_da(
-        Duration::from_millis(50),
-        None,
-        64,
-        true,
-        Some(da_box),
-    );
+    let mut handle =
+        CommitterHandle::spawn_with_da(Duration::from_millis(50), None, 64, true, Some(da_box));
     let batch = make_commit_batch(&funded_engine(), vec![], 1);
     handle.send_batch(batch).await.unwrap();
 
@@ -109,13 +108,8 @@ async fn test_two_different_batches_produce_different_receipts() {
     // Batch 2: different deposit amount
     let mock2 = MockDaClient::new();
     let da_box2: Box<dyn committer::DataAvailabilityClient> = Box::new(mock2.clone());
-    let mut handle2 = CommitterHandle::spawn_with_da(
-        Duration::from_millis(50),
-        None,
-        64,
-        true,
-        Some(da_box2),
-    );
+    let mut handle2 =
+        CommitterHandle::spawn_with_da(Duration::from_millis(50), None, 64, true, Some(da_box2));
     let mut e2 = MatchingEngine::new(FeeConfig::default(), 1.0);
     e2.add_market(Market {
         id: MarketId::new("BTC", "USDC"),
@@ -147,7 +141,10 @@ async fn test_two_different_batches_produce_different_receipts() {
 
     let hash1 = r1.da_record.unwrap().receipt.content_hash;
     let hash2 = r2.da_record.unwrap().receipt.content_hash;
-    assert_ne!(hash1, hash2, "different batches must produce different content hashes");
+    assert_ne!(
+        hash1, hash2,
+        "different batches must produce different content hashes"
+    );
 }
 
 /// A failing DA client should not prevent the commit from completing.
@@ -155,13 +152,8 @@ async fn test_two_different_batches_produce_different_receipts() {
 #[tokio::test]
 async fn test_da_failure_does_not_block_commit() {
     let failing_da: Box<dyn committer::DataAvailabilityClient> = Box::new(MockDaClient::failing());
-    let mut handle = CommitterHandle::spawn_with_da(
-        Duration::from_millis(50),
-        None,
-        64,
-        true,
-        Some(failing_da),
-    );
+    let mut handle =
+        CommitterHandle::spawn_with_da(Duration::from_millis(50), None, 64, true, Some(failing_da));
     let batch = make_commit_batch(&funded_engine(), vec![], 1);
     handle.send_batch(batch).await.unwrap();
 

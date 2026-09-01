@@ -1,3 +1,8 @@
+use crate::ofi::{
+    ToxicityScorer, CREDIT_PENALTY_DURATION_US, CREDIT_PENALTY_MULTIPLIER,
+    TOXICITY_PENALTY_THRESHOLD,
+};
+use crate::{CreditSystem, DeltaBuffer, EngineMap, OrderBook};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -7,10 +12,17 @@ use types::{
     OrderStatus, OrderType, PostOrderRequest, Request, Response, Timestamp, UserId, UserMetadata,
     VelaError, WithdrawalRequest,
 };
-use crate::{DeltaBuffer, CreditSystem, EngineMap, OrderBook};
-use crate::ofi::{ToxicityScorer, TOXICITY_PENALTY_THRESHOLD, CREDIT_PENALTY_MULTIPLIER, CREDIT_PENALTY_DURATION_US};
 
-type ExpiryCandidate = (Timestamp, OrderId, u64, MarketId, OrderSide, u64, u64, Option<String>);
+type ExpiryCandidate = (
+    Timestamp,
+    OrderId,
+    u64,
+    MarketId,
+    OrderSide,
+    u64,
+    u64,
+    Option<String>,
+);
 
 pub struct MatchingEngine {
     pub order_books: EngineMap<MarketId, OrderBook>,
@@ -76,17 +88,20 @@ impl MatchingEngine {
     }
 
     fn get_metadata(&self, user: &UserId) -> UserMetadata {
-        self.metadata.get(user).cloned().unwrap_or_else(|| UserMetadata {
-            user: user.clone(),
-            nonce_window: types::NonceWindow::new(),
-            open_order_ids: [0u64; 64],
-            credit_ratio: 1.0,
-            total_quoted_notional: 0,
-            actual_collateral: 0,
-            ref_by: None,
-            ref_earnings: 0,
-            referred_users: vec![],
-        })
+        self.metadata
+            .get(user)
+            .cloned()
+            .unwrap_or_else(|| UserMetadata {
+                user: user.clone(),
+                nonce_window: types::NonceWindow::new(),
+                open_order_ids: [0u64; 64],
+                credit_ratio: 1.0,
+                total_quoted_notional: 0,
+                actual_collateral: 0,
+                ref_by: None,
+                ref_earnings: 0,
+                referred_users: vec![],
+            })
     }
 
     fn process_post_order(&mut self, req: PostOrderRequest) -> Vec<Response> {
@@ -144,14 +159,22 @@ impl MatchingEngine {
         let bal_base: &EngineMap<(UserId, AssetId), Balance> =
             self.snapshot_balances.as_deref().unwrap_or(&self.balances);
 
-        let mut candidates: Vec<ExpiryCandidate> =
-            meta.iter_order_ids().filter_map(|oid| {
+        let mut candidates: Vec<ExpiryCandidate> = meta
+            .iter_order_ids()
+            .filter_map(|oid| {
                 for (mid, book) in &self.order_books {
                     if let Some(o) = book.get_order(oid) {
-                        let notional = CreditSystem::compute_notional(o.price, o.remaining_quantity());
+                        let notional =
+                            CreditSystem::compute_notional(o.price, o.remaining_quantity());
                         return Some((
-                            o.timestamp, oid, notional, mid.clone(),
-                            o.side, o.price, o.remaining_quantity(), o.client_order_id.clone(),
+                            o.timestamp,
+                            oid,
+                            notional,
+                            mid.clone(),
+                            o.side,
+                            o.price,
+                            o.remaining_quantity(),
+                            o.client_order_id.clone(),
                         ));
                     }
                 }
@@ -171,7 +194,10 @@ impl MatchingEngine {
                 None => continue,
             };
             let (cancel_asset, unlock_amount) = match side {
-                OrderSide::Bid => (market.quote, CreditSystem::compute_notional(price, remaining)),
+                OrderSide::Bid => (
+                    market.quote,
+                    CreditSystem::compute_notional(price, remaining),
+                ),
                 OrderSide::Ask => (market.base, remaining),
             };
             delta.record_remove(market_id, oid);
@@ -207,10 +233,16 @@ impl MatchingEngine {
             if coid.len() > 64 {
                 return Err(VelaError::InvalidClientOrderId);
             }
-            if !coid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            if !coid
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
                 return Err(VelaError::InvalidClientOrderId);
             }
-            let duplicate = self.order_books.values().any(|b| b.find_by_client_order_id(&req.user, coid).is_some());
+            let duplicate = self
+                .order_books
+                .values()
+                .any(|b| b.find_by_client_order_id(&req.user, coid).is_some());
             if duplicate {
                 return Err(VelaError::DuplicateClientOrderId);
             }
@@ -244,7 +276,8 @@ impl MatchingEngine {
             return Err(VelaError::InsufficientBalance);
         }
         if spend_balance.available < order_notional {
-            let cancels = self.make_room_for_order(&req.user, &mut meta, deposited, order_notional, delta);
+            let cancels =
+                self.make_room_for_order(&req.user, &mut meta, deposited, order_notional, delta);
             room_cancels.extend(cancels);
             self.credit_system.check_credit(
                 &req.user,
@@ -285,7 +318,10 @@ impl MatchingEngine {
 
         let remaining = req.quantity.saturating_sub(total_filled);
         let will_rest = remaining > 0
-            && matches!(req.order_type, OrderType::GoodTillCanceled | OrderType::PostOnly);
+            && matches!(
+                req.order_type,
+                OrderType::GoodTillCanceled | OrderType::PostOnly
+            );
 
         if will_rest {
             if book.is_full() {
@@ -296,13 +332,21 @@ impl MatchingEngine {
                 OrderSide::Ask => remaining,
             };
             delta.lock_available(&req.user, &spend_asset, resting_spend, bal_base);
-            order.status = if total_filled > 0 { OrderStatus::PartiallyFilled } else { OrderStatus::Open };
+            order.status = if total_filled > 0 {
+                OrderStatus::PartiallyFilled
+            } else {
+                OrderStatus::Open
+            };
             meta.push_order_id(order.id);
             meta.total_quoted_notional += CreditSystem::compute_notional(req.price, remaining);
             delta.set_metadata(meta);
             delta.record_insert(req.market.clone(), order.clone());
         } else {
-            order.status = if total_filled >= req.quantity { OrderStatus::Filled } else { OrderStatus::Canceled };
+            order.status = if total_filled >= req.quantity {
+                OrderStatus::Filled
+            } else {
+                OrderStatus::Canceled
+            };
             delta.set_metadata(meta);
         }
 
@@ -358,13 +402,19 @@ impl MatchingEngine {
         'outer: for (fill_price, level_orders) in matchable_iter {
             let fills_before = fills.len();
             for resting in level_orders {
-                if taker_remaining == 0 { break 'outer; }
-                if resting.user == order.user { continue; }
+                if taker_remaining == 0 {
+                    break 'outer;
+                }
+                if resting.user == order.user {
+                    continue;
+                }
 
                 let consumed = locally_consumed.get(&resting.id).copied().unwrap_or(0);
                 let remaining_at_start = resting.remaining_quantity();
                 let resting_remaining = remaining_at_start.saturating_sub(consumed);
-                if resting_remaining == 0 { continue; }
+                if resting_remaining == 0 {
+                    continue;
+                }
 
                 let fill_qty = taker_remaining.min(resting_remaining);
                 let fill_notional = CreditSystem::compute_notional(fill_price, fill_qty);
@@ -400,9 +450,11 @@ impl MatchingEngine {
                     delta.record_remove(order.market.clone(), resting.id);
                     let mut maker_meta = delta.get_metadata(&resting.user, meta_base);
                     maker_meta.remove_order_id(resting.id);
-                    let resting_notional = CreditSystem::compute_notional(resting.price, resting.remaining_quantity());
-                    maker_meta.total_quoted_notional =
-                        maker_meta.total_quoted_notional.saturating_sub(resting_notional);
+                    let resting_notional =
+                        CreditSystem::compute_notional(resting.price, resting.remaining_quantity());
+                    maker_meta.total_quoted_notional = maker_meta
+                        .total_quoted_notional
+                        .saturating_sub(resting_notional);
                     if is_bid_maker {
                         maker_meta.actual_collateral =
                             maker_meta.actual_collateral.saturating_sub(fill_notional);
@@ -411,7 +463,8 @@ impl MatchingEngine {
                 } else {
                     delta.record_partial_fill(order.market.clone(), resting.id, fill_qty);
                     let mut maker_meta = delta.get_metadata(&resting.user, meta_base);
-                    maker_meta.total_quoted_notional = maker_meta.total_quoted_notional
+                    maker_meta.total_quoted_notional = maker_meta
+                        .total_quoted_notional
                         .saturating_sub(CreditSystem::compute_notional(resting.price, fill_qty));
                     if is_bid_maker {
                         maker_meta.actual_collateral =
@@ -436,7 +489,7 @@ impl MatchingEngine {
         let total_fill_qty: u64 = fills.iter().map(|f| f.quantity).sum();
         if total_fill_qty > 0 {
             let signed_qty: i64 = match order.side {
-                OrderSide::Bid =>  total_fill_qty as i64,
+                OrderSide::Bid => total_fill_qty as i64,
                 OrderSide::Ask => -(total_fill_qty as i64),
             };
             let walked_book = levels_with_fills > 1;
@@ -469,7 +522,10 @@ impl MatchingEngine {
                                 let consumed = locally_consumed.get(&oid).copied().unwrap_or(0);
                                 let remaining = o.remaining_quantity().saturating_sub(consumed);
                                 if remaining > 0 {
-                                    return Some((oid, CreditSystem::compute_notional(o.price, remaining)));
+                                    return Some((
+                                        oid,
+                                        CreditSystem::compute_notional(o.price, remaining),
+                                    ));
                                 }
                                 return None;
                             }
@@ -535,28 +591,58 @@ impl MatchingEngine {
                 delta.debit_locked(&fill.taker, &market.quote, fill_notional, bal_base);
                 delta.credit_available(&fill.taker, &market.base, fill.quantity, bal_base);
                 if fill.taker_fee > 0 {
-                    delta.debit_available(&fill.taker, &market.quote, fill.taker_fee as u64, bal_base);
+                    delta.debit_available(
+                        &fill.taker,
+                        &market.quote,
+                        fill.taker_fee as u64,
+                        bal_base,
+                    );
                 }
                 delta.debit_locked(&fill.maker, &market.base, fill.quantity, bal_base);
                 delta.credit_available(&fill.maker, &market.quote, fill_notional, bal_base);
                 if fill.maker_fee < 0 {
-                    delta.credit_available(&fill.maker, &market.quote, fill.maker_fee.unsigned_abs(), bal_base);
+                    delta.credit_available(
+                        &fill.maker,
+                        &market.quote,
+                        fill.maker_fee.unsigned_abs(),
+                        bal_base,
+                    );
                 } else if fill.maker_fee > 0 {
-                    delta.debit_available(&fill.maker, &market.quote, fill.maker_fee as u64, bal_base);
+                    delta.debit_available(
+                        &fill.maker,
+                        &market.quote,
+                        fill.maker_fee as u64,
+                        bal_base,
+                    );
                 }
             }
             OrderSide::Ask => {
                 delta.debit_locked(&fill.taker, &market.base, fill.quantity, bal_base);
                 delta.credit_available(&fill.taker, &market.quote, fill_notional, bal_base);
                 if fill.taker_fee > 0 {
-                    delta.debit_available(&fill.taker, &market.quote, fill.taker_fee as u64, bal_base);
+                    delta.debit_available(
+                        &fill.taker,
+                        &market.quote,
+                        fill.taker_fee as u64,
+                        bal_base,
+                    );
                 }
                 delta.debit_locked(&fill.maker, &market.quote, fill_notional, bal_base);
                 delta.credit_available(&fill.maker, &market.base, fill.quantity, bal_base);
                 if fill.maker_fee < 0 {
-                    delta.credit_available(&fill.maker, &market.quote, fill.maker_fee.unsigned_abs(), bal_base);
+                    delta.credit_available(
+                        &fill.maker,
+                        &market.quote,
+                        fill.maker_fee.unsigned_abs(),
+                        bal_base,
+                    );
                 } else if fill.maker_fee > 0 {
-                    delta.debit_available(&fill.maker, &market.quote, fill.maker_fee as u64, bal_base);
+                    delta.debit_available(
+                        &fill.maker,
+                        &market.quote,
+                        fill.maker_fee as u64,
+                        bal_base,
+                    );
                 }
             }
         }
@@ -573,7 +659,8 @@ impl MatchingEngine {
                         delta.credit_available(&ref_user, &market.quote, referral_amount, bal_base);
                         delta.add_exchange_fee(market.quote.as_str(), -(referral_amount as i64));
                         let mut ref_meta = delta.get_metadata(&ref_user, meta_base);
-                        ref_meta.ref_earnings = ref_meta.ref_earnings.saturating_add(referral_amount);
+                        ref_meta.ref_earnings =
+                            ref_meta.ref_earnings.saturating_add(referral_amount);
                         delta.set_metadata(ref_meta);
                     }
                 }
@@ -593,13 +680,18 @@ impl MatchingEngine {
         let order_id = if let Some(id) = req.order_id {
             id
         } else if let Some(coid) = &req.client_order_id {
-            let found = self.order_books.values().find_map(|b| b.find_by_client_order_id(&req.user, coid));
+            let found = self
+                .order_books
+                .values()
+                .find_map(|b| b.find_by_client_order_id(&req.user, coid));
             match found {
                 Some(id) => id,
-                None => return vec![Response::Error(ErrorResponse {
-                    code: ErrorCode::OrderNotFound,
-                    message: "order not found".into(),
-                })],
+                None => {
+                    return vec![Response::Error(ErrorResponse {
+                        code: ErrorCode::OrderNotFound,
+                        message: "order not found".into(),
+                    })]
+                }
             }
         } else {
             return vec![Response::Error(ErrorResponse {
@@ -608,7 +700,10 @@ impl MatchingEngine {
             })];
         };
 
-        let removed = self.order_books.values_mut().find_map(|b| b.remove_order(order_id));
+        let removed = self
+            .order_books
+            .values_mut()
+            .find_map(|b| b.remove_order(order_id));
 
         match removed {
             Some(order) => {
@@ -624,8 +719,12 @@ impl MatchingEngine {
                     };
                     self.unlock_balance(&req.user, &spend_asset, spend_amount);
                 }
-                meta.total_quoted_notional = meta.total_quoted_notional
-                    .saturating_sub(CreditSystem::compute_notional(order.price, order.remaining_quantity()));
+                meta.total_quoted_notional =
+                    meta.total_quoted_notional
+                        .saturating_sub(CreditSystem::compute_notional(
+                            order.price,
+                            order.remaining_quantity(),
+                        ));
                 self.metadata.insert(req.user.clone(), meta);
                 vec![Response::OrderCanceled(types::OrderCanceledResponse {
                     order_id,
@@ -705,7 +804,6 @@ impl MatchingEngine {
             locked: bal.locked,
         })]
     }
-
 }
 
 impl MatchingEngine {
@@ -760,7 +858,10 @@ impl MatchingEngine {
     ///
     /// Returns one `Vec<Response>` per input request, in submission order.
     pub fn process_batch(&mut self, requests: Vec<(Request, Timestamp)>) -> Vec<Vec<Response>> {
-        let ts = requests.first().map(|(_, ts)| *ts).unwrap_or(self.timestamp);
+        let ts = requests
+            .first()
+            .map(|(_, ts)| *ts)
+            .unwrap_or(self.timestamp);
         self.credit_system.evict_expired_penalties(ts);
         requests
             .into_iter()

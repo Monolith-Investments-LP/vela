@@ -1,22 +1,22 @@
-use std::sync::Arc;
+use api::types::Incident;
+use api::wal::{Wal, WalEngineStart, WalEngineStop};
 use engine::MatchingEngine;
+use std::sync::Arc;
+use types::{
+    AssetId, DepositRequest, FeeConfig, Market, MarketId, OrderSide, OrderType, PostOrderRequest,
+    Request, UserId,
+};
 
 // mimalloc allocator: measurably faster than the platform default on the
 // matching engine's HashMap-heavy allocation pattern. Global; no runtime
 // configuration required.
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-use types::{
-    AssetId, DepositRequest, FeeConfig, Market, MarketId, OrderSide, OrderType, PostOrderRequest,
-    Request, UserId,
-};
-use api::types::Incident;
-use api::wal::{Wal, WalEngineStart, WalEngineStop};
 
 fn seed_markets(engine: &mut MatchingEngine) {
     for ticker in &[
-        "ETH", "BTC", "SOL", "ARB", "OP", "AVAX", "MATIC", "LINK", "UNI", "AAVE", "DOGE",
-        "PEPE", "WIF", "JUP", "PENDLE", "EIGEN",
+        "ETH", "BTC", "SOL", "ARB", "OP", "AVAX", "MATIC", "LINK", "UNI", "AAVE", "DOGE", "PEPE",
+        "WIF", "JUP", "PENDLE", "EIGEN",
     ] {
         engine.add_market(Market {
             id: MarketId(format!("{ticker}-USDC")),
@@ -34,8 +34,8 @@ fn seed_markets(engine: &mut MatchingEngine) {
     let test_user = UserId([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 
     for (i, asset) in [
-        "ETH", "BTC", "SOL", "ARB", "OP", "AVAX", "MATIC", "LINK", "UNI", "AAVE", "DOGE",
-        "PEPE", "WIF", "JUP", "PENDLE", "EIGEN", "USDC",
+        "ETH", "BTC", "SOL", "ARB", "OP", "AVAX", "MATIC", "LINK", "UNI", "AAVE", "DOGE", "PEPE",
+        "WIF", "JUP", "PENDLE", "EIGEN", "USDC",
     ]
     .iter()
     .enumerate()
@@ -77,8 +77,8 @@ fn seed_order_books(engine: &mut MatchingEngine) {
     );
 
     for (i, asset) in [
-        "BTC", "ETH", "SOL", "AVAX", "MATIC", "LINK", "UNI", "ARB", "OP", "AAVE", "DOGE",
-        "PEPE", "WIF", "JUP", "PENDLE", "EIGEN",
+        "BTC", "ETH", "SOL", "AVAX", "MATIC", "LINK", "UNI", "ARB", "OP", "AAVE", "DOGE", "PEPE",
+        "WIF", "JUP", "PENDLE", "EIGEN",
     ]
     .iter()
     .enumerate()
@@ -181,9 +181,8 @@ async fn main() {
         Ok(w) => w,
         Err(e) => {
             eprintln!("WAL init failed: {e} — continuing without WAL");
-            Wal::new(&std::env::temp_dir().join("vela_wal_fallback")).unwrap_or_else(|_| {
-                panic!("Cannot initialize WAL even in temp dir")
-            })
+            Wal::new(&std::env::temp_dir().join("vela_wal_fallback"))
+                .unwrap_or_else(|_| panic!("Cannot initialize WAL even in temp dir"))
         }
     });
 
@@ -199,8 +198,10 @@ async fn main() {
     let mut loaded_incidents: Vec<Incident> = Vec::new();
     let mut loaded_decisions: Vec<api::types::Decision> = Vec::new();
     let mut loaded_mms: Vec<api::types::RegisteredMM> = Vec::new();
-    let mut loaded_proofs: std::collections::HashMap<u64, zkvm::BatchProof> = std::collections::HashMap::new();
-    let mut loaded_attestations: std::collections::HashMap<u64, tee::AttestationRecord> = std::collections::HashMap::new();
+    let mut loaded_proofs: std::collections::HashMap<u64, zkvm::BatchProof> =
+        std::collections::HashMap::new();
+    let mut loaded_attestations: std::collections::HashMap<u64, tee::AttestationRecord> =
+        std::collections::HashMap::new();
     let mut need_restart_incident = false;
 
     match api::snapshot::load_snapshot().await {
@@ -289,21 +290,31 @@ async fn main() {
         });
     }
 
-    wal.append(api::wal::ENGINE_START, &WalEngineStart {
-        version: "0.2.0".to_string(),
-        reason: recovery_reason.to_string(),
-        previous_sequence,
-    })
+    wal.append(
+        api::wal::ENGINE_START,
+        &WalEngineStart {
+            version: "0.2.0".to_string(),
+            reason: recovery_reason.to_string(),
+            previous_sequence,
+        },
+    )
     .await
-    .unwrap_or_else(|e| { tracing::error!("WAL ENGINE_START write failed: {e}"); 0 });
+    .unwrap_or_else(|e| {
+        tracing::error!("WAL ENGINE_START write failed: {e}");
+        0
+    });
 
     if let Some((anchors, count)) = api::anchor::load_anchors().await {
         let last = anchors.last().map(|a| (a.tx_hash.clone(), a.timestamp));
         *state.anchors.lock().await = anchors;
-        state.anchor_count.store(count, std::sync::atomic::Ordering::Relaxed);
+        state
+            .anchor_count
+            .store(count, std::sync::atomic::Ordering::Relaxed);
         if let Some((tx, ts)) = last {
             *state.last_anchor_tx.lock().await = Some(tx);
-            state.last_anchor_time.store(ts, std::sync::atomic::Ordering::Relaxed);
+            state
+                .last_anchor_time
+                .store(ts, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -379,10 +390,16 @@ async fn main() {
         tracing::error!("Final snapshot save failed: {e}");
     }
 
-    wal.append(api::wal::ENGINE_STOP, &WalEngineStop {
-        reason: "clean".to_string(),
-        final_sequence: wal.current_sequence(),
-    })
+    wal.append(
+        api::wal::ENGINE_STOP,
+        &WalEngineStop {
+            reason: "clean".to_string(),
+            final_sequence: wal.current_sequence(),
+        },
+    )
     .await
-    .unwrap_or_else(|e| { tracing::error!("WAL ENGINE_STOP write failed: {e}"); 0 });
+    .unwrap_or_else(|e| {
+        tracing::error!("WAL ENGINE_STOP write failed: {e}");
+        0
+    });
 }

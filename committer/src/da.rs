@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------------------
 // Core types
@@ -70,7 +70,10 @@ impl DataAvailabilityClient for LocalDaClient {
         let hash = keccak256(data);
         let filename = format!("da_batch_{:016}.bin", sequence);
         std::fs::write(self.dir.join(&filename), data)?;
-        Ok(DaReceipt { content_hash: hash, sequence })
+        Ok(DaReceipt {
+            content_hash: hash,
+            sequence,
+        })
     }
 
     fn name(&self) -> &'static str {
@@ -106,14 +109,20 @@ impl MockDaClient {
     /// Create a client that succeeds on every call.
     pub fn new() -> Self {
         MockDaClient {
-            inner: Arc::new(Mutex::new(MockInner { submissions: vec![], fail: false })),
+            inner: Arc::new(Mutex::new(MockInner {
+                submissions: vec![],
+                fail: false,
+            })),
         }
     }
 
     /// Create a client that always returns an error from `submit`.
     pub fn failing() -> Self {
         MockDaClient {
-            inner: Arc::new(Mutex::new(MockInner { submissions: vec![], fail: true })),
+            inner: Arc::new(Mutex::new(MockInner {
+                submissions: vec![],
+                fail: true,
+            })),
         }
     }
 
@@ -138,10 +147,16 @@ impl DataAvailabilityClient for MockDaClient {
     fn submit(&self, sequence: u64, data: &[u8]) -> anyhow::Result<DaReceipt> {
         let mut inner = self.inner.lock().unwrap();
         if inner.fail {
-            anyhow::bail!("MockDaClient: simulated DA failure for sequence {}", sequence);
+            anyhow::bail!(
+                "MockDaClient: simulated DA failure for sequence {}",
+                sequence
+            );
         }
         let hash = keccak256(data);
-        let receipt = DaReceipt { content_hash: hash, sequence };
+        let receipt = DaReceipt {
+            content_hash: hash,
+            sequence,
+        };
         inner.submissions.push(MockSubmission {
             sequence,
             data: data.to_vec(),

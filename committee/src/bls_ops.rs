@@ -25,8 +25,8 @@ pub fn g1_mul(point: &G1, scalar_le: &[u8; 32]) -> Result<G1> {
     // We validate the decompressed point before multiplying.
     unsafe {
         use blst::{
-            blst_p1, blst_p1_affine, blst_p1_affine_compress, blst_p1_from_affine,
-            blst_p1_mult, blst_p1_to_affine, blst_p1_uncompress, BLST_ERROR,
+            blst_p1, blst_p1_affine, blst_p1_affine_compress, blst_p1_from_affine, blst_p1_mult,
+            blst_p1_to_affine, blst_p1_uncompress, BLST_ERROR,
         };
 
         let mut p_aff: blst_p1_affine = std::mem::zeroed();
@@ -55,7 +55,7 @@ pub fn g1_add(a: &G1, b: &G1) -> Result<G1> {
     // SAFETY: same as g1_mul — correctly-sized buffers, validated inputs.
     unsafe {
         use blst::{
-            blst_p1, blst_p1_affine, blst_p1_affine_compress, blst_p1_add_or_double,
+            blst_p1, blst_p1_add_or_double, blst_p1_affine, blst_p1_affine_compress,
             blst_p1_from_affine, blst_p1_to_affine, blst_p1_uncompress, BLST_ERROR,
         };
 
@@ -94,8 +94,8 @@ pub fn g1_neg(point: &G1) -> Result<G1> {
     // SAFETY: same as above.
     unsafe {
         use blst::{
-            blst_p1, blst_p1_affine, blst_p1_affine_compress, blst_p1_cneg,
-            blst_p1_from_affine, blst_p1_to_affine, blst_p1_uncompress, BLST_ERROR,
+            blst_p1, blst_p1_affine, blst_p1_affine_compress, blst_p1_cneg, blst_p1_from_affine,
+            blst_p1_to_affine, blst_p1_uncompress, BLST_ERROR,
         };
 
         let mut p_aff: blst_p1_affine = std::mem::zeroed();
@@ -123,8 +123,8 @@ pub fn g1_generator_mul(scalar_le: &[u8; 32]) -> Result<G1> {
     // SAFETY: BLS12_381_G1 is a valid static affine generator defined by blst.
     unsafe {
         use blst::{
-            blst_p1, blst_p1_affine, blst_p1_affine_compress, blst_p1_from_affine,
-            blst_p1_mult, blst_p1_to_affine, BLS12_381_G1,
+            blst_p1, blst_p1_affine, blst_p1_affine_compress, blst_p1_from_affine, blst_p1_mult,
+            blst_p1_to_affine, BLS12_381_G1,
         };
 
         let mut gen_proj: blst_p1 = std::mem::zeroed();

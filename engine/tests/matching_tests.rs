@@ -1,14 +1,24 @@
 use engine::{CreditSystem, MatchingEngine};
 use types::{
-    AssetId, CancelOrderRequest, DepositRequest, ErrorCode, FeeConfig, Market,
-    MarketId, NonceWindow, OrderSide, OrderStatus, OrderType, PostOrderRequest, Request,
-    Response, UserMetadata, UserId, PRICE_SCALE, QUANTITY_SCALE,
+    AssetId, CancelOrderRequest, DepositRequest, ErrorCode, FeeConfig, Market, MarketId,
+    NonceWindow, OrderSide, OrderStatus, OrderType, PostOrderRequest, Request, Response, UserId,
+    UserMetadata, PRICE_SCALE, QUANTITY_SCALE,
 };
 
-fn btc_usdc() -> MarketId { MarketId::new("BTC", "USDC") }
-fn usdc() -> AssetId { AssetId::from_str("USDC") }
-fn btc() -> AssetId { AssetId::from_str("BTC") }
-fn user(i: u8) -> UserId { let mut a = [0u8; 20]; a[19] = i; UserId(a) }
+fn btc_usdc() -> MarketId {
+    MarketId::new("BTC", "USDC")
+}
+fn usdc() -> AssetId {
+    AssetId::from_str("USDC")
+}
+fn btc() -> AssetId {
+    AssetId::from_str("BTC")
+}
+fn user(i: u8) -> UserId {
+    let mut a = [0u8; 20];
+    a[19] = i;
+    UserId(a)
+}
 
 fn default_market() -> Market {
     Market {
@@ -31,7 +41,12 @@ fn engine() -> MatchingEngine {
 }
 
 fn deposit(user: UserId, asset: AssetId, amount: u64) -> Request {
-    Request::Deposit(DepositRequest { user, asset, amount, l1_tx_hash: [0u8; 32] })
+    Request::Deposit(DepositRequest {
+        user,
+        asset,
+        amount,
+        l1_tx_hash: [0u8; 32],
+    })
 }
 
 fn post_bid(user: UserId, price: u64, qty: u64, nonce: u64) -> Request {
@@ -106,7 +121,16 @@ fn test_resting_bid_no_match() {
     let maker = user(1);
     e.process(deposit(maker.clone(), usdc(), 50_100 * PRICE_SCALE), 1);
     let responses = e.process(post_bid(maker.clone(), 50_000, 1, 1), 2);
-    let posted = responses.iter().find_map(|r| if let Response::OrderPosted(p) = r { Some(p) } else { None }).unwrap();
+    let posted = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(posted.status, OrderStatus::Open);
     let bal = e.balances.get(&(maker, usdc())).unwrap();
     assert_eq!(bal.locked, 50_000 * PRICE_SCALE);
@@ -122,12 +146,30 @@ fn test_full_match_bid_against_ask() {
     e.process(deposit(taker.clone(), usdc(), 50_100 * PRICE_SCALE), 2);
 
     let ask_responses = e.process(post_ask(maker.clone(), 50_000, 1, 1), 3);
-    let posted = ask_responses.iter().find_map(|r| if let Response::OrderPosted(p) = r { Some(p) } else { None }).unwrap();
+    let posted = ask_responses
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(posted.status, OrderStatus::Open);
     assert!(e.order_books.get(&btc_usdc()).unwrap().best_ask().is_some());
 
     let bid_responses = e.process(post_bid(taker.clone(), 50_000, 1, 1), 4);
-    let fill = bid_responses.iter().find_map(|r| if let Response::OrderFilled(f) = r { Some(f) } else { None }).unwrap();
+    let fill = bid_responses
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderFilled(f) = r {
+                Some(f)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(fill.quantity, QUANTITY_SCALE);
     assert_eq!(fill.price, 50_000 * PRICE_SCALE);
     assert_eq!(fill.maker, maker);
@@ -154,7 +196,16 @@ fn test_partial_fill() {
     e.process(post_ask(maker.clone(), 50_000, 2, 1), 3);
     let bid_responses = e.process(post_bid(taker.clone(), 50_000, 1, 1), 4);
 
-    let fill = bid_responses.iter().find_map(|r| if let Response::OrderFilled(f) = r { Some(f) } else { None }).unwrap();
+    let fill = bid_responses
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderFilled(f) = r {
+                Some(f)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(fill.quantity, QUANTITY_SCALE);
 
     let book = e.order_books.get(&btc_usdc()).unwrap();
@@ -169,7 +220,16 @@ fn test_ioc_no_fill_canceled() {
     let taker = user(1);
     e.process(deposit(taker.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
     let responses = e.process(post_ioc_bid(taker.clone(), 50_000, 1, 1), 2);
-    let posted = responses.iter().find_map(|r| if let Response::OrderPosted(p) = r { Some(p) } else { None }).unwrap();
+    let posted = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(posted.status, OrderStatus::Canceled);
     let book = e.order_books.get(&btc_usdc()).unwrap();
     assert!(book.best_bid().is_none());
@@ -186,7 +246,16 @@ fn test_fok_not_fully_fillable_rejected() {
     e.process(post_ask(maker.clone(), 50_000, 1, 1), 3);
 
     let responses = e.process(post_fok_bid(taker.clone(), 50_000, 2, 1), 4);
-    let err = responses.iter().find_map(|r| if let Response::Error(e) = r { Some(e) } else { None }).unwrap();
+    let err = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(err.code, ErrorCode::FokNotFilled);
 
     let book = e.order_books.get(&btc_usdc()).unwrap();
@@ -199,7 +268,16 @@ fn test_cancel_resting_order() {
     let maker = user(1);
     e.process(deposit(maker.clone(), usdc(), 50_100 * PRICE_SCALE), 1);
     let responses = e.process(post_bid(maker.clone(), 50_000, 1, 1), 2);
-    let order_id = responses.iter().find_map(|r| if let Response::OrderPosted(p) = r { Some(p.order_id) } else { None }).unwrap();
+    let order_id = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p.order_id)
+            } else {
+                None
+            }
+        })
+        .unwrap();
 
     let cancel = Request::CancelOrder(CancelOrderRequest {
         user: maker.clone(),
@@ -223,7 +301,16 @@ fn test_invalid_nonce_replay() {
     e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
     e.process(post_bid(u.clone(), 50_000, 1, 5), 2);
     let responses = e.process(post_bid(u.clone(), 50_000, 1, 5), 3);
-    let err = responses.iter().find_map(|r| if let Response::Error(e) = r { Some(e) } else { None }).unwrap();
+    let err = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(err.code, ErrorCode::InvalidNonce);
 }
 
@@ -235,7 +322,9 @@ fn test_no_self_match() {
     e.process(deposit(u.clone(), btc(), 1 * QUANTITY_SCALE), 2);
     e.process(post_ask(u.clone(), 50_000, 1, 1), 3);
     let responses = e.process(post_bid(u.clone(), 50_000, 1, 2), 4);
-    let fill = responses.iter().find(|r| matches!(r, Response::OrderFilled(_)));
+    let fill = responses
+        .iter()
+        .find(|r| matches!(r, Response::OrderFilled(_)));
     assert!(fill.is_none(), "self-match should not produce a fill");
 }
 
@@ -254,7 +343,16 @@ fn test_price_time_priority() {
     e.process(post_ask(maker2.clone(), 50_000, 1, 1), 5);
 
     let responses = e.process(post_bid(taker.clone(), 50_000, 1, 1), 6);
-    let fill = responses.iter().find_map(|r| if let Response::OrderFilled(f) = r { Some(f) } else { None }).unwrap();
+    let fill = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderFilled(f) = r {
+                Some(f)
+            } else {
+                None
+            }
+        })
+        .unwrap();
 
     assert_eq!(fill.maker, maker1, "lower ask price should fill first");
     assert_eq!(fill.price, 49_000 * PRICE_SCALE);
@@ -266,7 +364,16 @@ fn test_insufficient_balance_rejected() {
     let u = user(1);
     e.process(deposit(u.clone(), usdc(), 100 * PRICE_SCALE), 1);
     let responses = e.process(post_bid(u.clone(), 50_000, 1, 1), 2);
-    let err = responses.iter().find_map(|r| if let Response::Error(e) = r { Some(e) } else { None }).unwrap();
+    let err = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(err.code, ErrorCode::InsufficientBalance);
 }
 
@@ -283,7 +390,16 @@ fn test_multi_level_fill() {
     e.process(post_ask(maker.clone(), 50_000, 1, 2), 4);
 
     let responses = e.process(post_bid(taker.clone(), 50_000, 2, 1), 5);
-    let fills: Vec<_> = responses.iter().filter_map(|r| if let Response::OrderFilled(f) = r { Some(f) } else { None }).collect();
+    let fills: Vec<_> = responses
+        .iter()
+        .filter_map(|r| {
+            if let Response::OrderFilled(f) = r {
+                Some(f)
+            } else {
+                None
+            }
+        })
+        .collect();
     assert_eq!(fills.len(), 2);
     assert_eq!(fills[0].price, 49_000 * PRICE_SCALE);
     assert_eq!(fills[1].price, 50_000 * PRICE_SCALE);
@@ -313,28 +429,68 @@ fn test_credit_allows_quoting_beyond_available() {
     // First bid: 1 BTC @ 60 USDC → notional 60. available=100≥60, no credit needed.
     // Locks 60. available=40, locked=60.
     let r1 = e.process(post_bid(maker.clone(), 60, 1, 1), 2);
-    let p1 = r1.iter().find_map(|r| if let Response::OrderPosted(p) = r { Some(p) } else { None }).unwrap();
+    let p1 = r1
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(p1.status, OrderStatus::Open, "first bid should rest");
 
     // Second bid: 1 BTC @ 60 USDC → notional 60. available=40 < 60 → CREDIT used.
     // total_quoted would be 60+60=120 ≤ 100*3=300. Credit allows it.
     let r2 = e.process(post_bid(maker.clone(), 60, 1, 2), 3);
-    let p2 = r2.iter().find_map(|r| if let Response::OrderPosted(p) = r { Some(p) } else { None }).unwrap();
-    assert_eq!(p2.status, OrderStatus::Open, "second bid using credit should rest");
+    let p2 = r2
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(
+        p2.status,
+        OrderStatus::Open,
+        "second bid using credit should rest"
+    );
 
     // Third bid: 1 BTC @ 60 USDC → notional 60. available=0 < 60 → CREDIT used.
     // total_quoted=180 ≤ 300. Still within credit limit.
     let r3 = e.process(post_bid(maker.clone(), 60, 1, 3), 4);
-    let p3 = r3.iter().find_map(|r| if let Response::OrderPosted(p) = r { Some(p) } else { None }).unwrap();
-    assert_eq!(p3.status, OrderStatus::Open, "third bid using credit should rest");
+    let p3 = r3
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(
+        p3.status,
+        OrderStatus::Open,
+        "third bid using credit should rest"
+    );
 
     let meta = e.metadata.get(&maker).unwrap();
     assert_eq!(meta.order_id_count(), 3);
     let expected_notional = CreditSystem::compute_notional(60 * PRICE_SCALE, QUANTITY_SCALE) * 3;
-    assert_eq!(meta.total_quoted_notional, expected_notional,
-        "total_quoted_notional should track all three bids");
+    assert_eq!(
+        meta.total_quoted_notional, expected_notional,
+        "total_quoted_notional should track all three bids"
+    );
     // Maker quoted 3×60=180 USDC with only 100 deposited — credit enabled the extra 80.
-    assert!(180 * PRICE_SCALE <= 100 * PRICE_SCALE * 3, "sanity: 180 ≤ 300 (ratio 3.0)");
+    assert!(
+        180 * PRICE_SCALE <= 100 * PRICE_SCALE * 3,
+        "sanity: 180 ≤ 300 (ratio 3.0)"
+    );
 }
 
 /// A single order whose notional exceeds the maker's total deposited is rejected
@@ -347,11 +503,21 @@ fn test_single_order_bounded_by_deposited() {
 
     // Try to post a bid for 1 BTC @ 200 USDC — notional 200 > deposited 100
     let responses = e.process(post_bid(maker.clone(), 200, 1, 1), 2);
-    let err = responses.iter()
-        .find_map(|r| if let Response::Error(e) = r { Some(e) } else { None })
+    let err = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
         .unwrap();
-    assert_eq!(err.code, ErrorCode::InsufficientBalance,
-        "order notional > total deposited must be rejected regardless of credit ratio");
+    assert_eq!(
+        err.code,
+        ErrorCode::InsufficientBalance,
+        "order notional > total deposited must be rejected regardless of credit ratio"
+    );
 }
 
 /// After a fill reduces the maker's actual collateral, if total_quoted_notional exceeds
@@ -376,22 +542,44 @@ fn test_fill_triggers_auto_cancel_when_ratio_breached() {
 
     // Bid X at 70: within deposited (100), uses available. Rests.
     let r_x = e.process(post_bid(maker.clone(), 70, 1, 1), 3);
-    let oid_x = r_x.iter()
-        .find_map(|r| if let Response::OrderPosted(p) = r { Some(p.order_id) } else { None })
+    let oid_x = r_x
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p.order_id)
+            } else {
+                None
+            }
+        })
         .unwrap();
-    assert!(r_x.iter().any(|r| matches!(r, Response::OrderPosted(p) if p.status == OrderStatus::Open)));
+    assert!(r_x
+        .iter()
+        .any(|r| matches!(r, Response::OrderPosted(p) if p.status == OrderStatus::Open)));
 
     // Bid Y at 70: available=30 < 70 → credit used (140 ≤ 150). Rests.
     let r_y = e.process(post_bid(maker.clone(), 70, 1, 2), 4);
-    let oid_y = r_y.iter()
-        .find_map(|r| if let Response::OrderPosted(p) = r { Some(p.order_id) } else { None })
+    let oid_y = r_y
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p.order_id)
+            } else {
+                None
+            }
+        })
         .unwrap();
-    assert!(r_y.iter().any(|r| matches!(r, Response::OrderPosted(p) if p.status == OrderStatus::Open)));
+    assert!(r_y
+        .iter()
+        .any(|r| matches!(r, Response::OrderPosted(p) if p.status == OrderStatus::Open)));
 
     {
         let meta = e.metadata.get(&maker).unwrap();
         assert_eq!(meta.order_id_count(), 2);
-        assert_eq!(meta.actual_collateral, 100 * PRICE_SCALE, "actual_collateral must equal deposit");
+        assert_eq!(
+            meta.actual_collateral,
+            100 * PRICE_SCALE,
+            "actual_collateral must equal deposit"
+        );
     }
 
     // Taker IOC ask @ 70, qty=1: hits best bid (70), fills X first (FIFO).
@@ -411,31 +599,59 @@ fn test_fill_triggers_auto_cancel_when_ratio_breached() {
     );
 
     // Fill must have occurred (X filled)
-    let fills: Vec<_> = taker_resp.iter()
+    let fills: Vec<_> = taker_resp
+        .iter()
         .filter(|r| matches!(r, Response::OrderFilled(_)))
         .collect();
     assert!(!fills.is_empty(), "taker ask should fill bid X");
 
     // Auto-cancel must have fired for Y (breach: 70 > 30*1.5=45)
-    let canceled_ids: Vec<_> = taker_resp.iter()
-        .filter_map(|r| if let Response::OrderCanceled(c) = r { Some(c.order_id) } else { None })
+    let canceled_ids: Vec<_> = taker_resp
+        .iter()
+        .filter_map(|r| {
+            if let Response::OrderCanceled(c) = r {
+                Some(c.order_id)
+            } else {
+                None
+            }
+        })
         .collect();
-    assert!(!canceled_ids.is_empty(), "credit breach must trigger auto-cancel");
-    assert!(canceled_ids.contains(&oid_y), "bid Y must be auto-canceled to restore ratio");
-    assert!(!canceled_ids.contains(&oid_x), "bid X was filled, not auto-canceled");
+    assert!(
+        !canceled_ids.is_empty(),
+        "credit breach must trigger auto-cancel"
+    );
+    assert!(
+        canceled_ids.contains(&oid_y),
+        "bid Y must be auto-canceled to restore ratio"
+    );
+    assert!(
+        !canceled_ids.contains(&oid_x),
+        "bid X was filled, not auto-canceled"
+    );
 
     // Book should be empty: X filled, Y auto-canceled.
     let book = e.order_books.get(&btc_usdc()).unwrap();
     assert!(book.best_bid().is_none(), "all maker bids should be gone");
 
     // Maker received 1 BTC from filling X.
-    let maker_btc = e.balances.get(&(maker.clone(), btc())).map(|b| b.total()).unwrap_or(0);
-    assert_eq!(maker_btc, 1 * QUANTITY_SCALE, "maker should have received 1 BTC");
+    let maker_btc = e
+        .balances
+        .get(&(maker.clone(), btc()))
+        .map(|b| b.total())
+        .unwrap_or(0);
+    assert_eq!(
+        maker_btc,
+        1 * QUANTITY_SCALE,
+        "maker should have received 1 BTC"
+    );
 
     // actual_collateral should have dropped by fill_notional.
     let meta = e.metadata.get(&maker).unwrap();
-    assert_eq!(meta.actual_collateral, 30 * PRICE_SCALE,
-        "actual_collateral = 100 - 70 (fill) = 30 USDC");
+    assert_eq!(
+        meta.actual_collateral,
+        30 * PRICE_SCALE,
+        "actual_collateral = 100 - 70 (fill) = 30 USDC"
+    );
 }
 
 /// 1:1 asset backing: after fills, the total of each asset across all users
@@ -474,16 +690,31 @@ fn test_asset_backing_invariant_holds() {
         5,
     );
 
-    let maker_usdc = e.balances.get(&(maker.clone(), usdc())).map(|b| b.total()).unwrap_or(0);
-    let maker_btc  = e.balances.get(&(maker.clone(), btc())).map(|b| b.total()).unwrap_or(0);
-    let taker_usdc = e.balances.get(&(taker.clone(), usdc())).map(|b| b.total()).unwrap_or(0);
+    let maker_usdc = e
+        .balances
+        .get(&(maker.clone(), usdc()))
+        .map(|b| b.total())
+        .unwrap_or(0);
+    let maker_btc = e
+        .balances
+        .get(&(maker.clone(), btc()))
+        .map(|b| b.total())
+        .unwrap_or(0);
+    let taker_usdc = e
+        .balances
+        .get(&(taker.clone(), usdc()))
+        .map(|b| b.total())
+        .unwrap_or(0);
 
     // Taker received USDC from fill.
     assert!(taker_usdc > 0, "taker should have received USDC from fill");
 
     // Maker received 1 BTC and still holds USDC for remaining resting bid (40 locked).
     assert_eq!(maker_btc, 1 * QUANTITY_SCALE, "maker received 1 BTC");
-    assert!(maker_usdc > 0, "maker should have remaining USDC for resting bid");
+    assert!(
+        maker_usdc > 0,
+        "maker should have remaining USDC for resting bid"
+    );
 
     // 1:1 USDC backing invariant: total USDC in system ≤ 100 USDC deposited by maker.
     // USDC flows from maker's locked balance to taker; fees are net-consumed by exchange.
@@ -491,7 +722,10 @@ fn test_asset_backing_invariant_holds() {
     assert!(
         maker_usdc + taker_usdc <= 100 * PRICE_SCALE,
         "total USDC must not exceed deposit: {} + {} = {} > {}",
-        maker_usdc, taker_usdc, maker_usdc + taker_usdc, 100 * PRICE_SCALE
+        maker_usdc,
+        taker_usdc,
+        maker_usdc + taker_usdc,
+        100 * PRICE_SCALE
     );
 }
 
@@ -511,11 +745,15 @@ fn test_set_ratio_per_user() {
     // With ratio=1.0, engine auto-cancels the first order to make room.
     let second = e.process(post_bid(maker.clone(), 80, 1, 2), 3);
     assert!(
-        second.iter().any(|r| matches!(r, Response::OrderPosted(p) if p.status == OrderStatus::Open)),
+        second
+            .iter()
+            .any(|r| matches!(r, Response::OrderPosted(p) if p.status == OrderStatus::Open)),
         "second bid must succeed via auto-cancel"
     );
     assert!(
-        second.iter().any(|r| matches!(r, Response::OrderCanceled(_))),
+        second
+            .iter()
+            .any(|r| matches!(r, Response::OrderCanceled(_))),
         "ratio=1.0 must trigger auto-cancel to make room"
     );
 
@@ -525,11 +763,15 @@ fn test_set_ratio_per_user() {
     // Third bid at 80: total_quoted+80=160 ≤ 200 → no auto-cancel needed.
     let third = e.process(post_bid(maker.clone(), 80, 1, 3), 4);
     assert!(
-        third.iter().any(|r| matches!(r, Response::OrderPosted(p) if p.status == OrderStatus::Open)),
+        third
+            .iter()
+            .any(|r| matches!(r, Response::OrderPosted(p) if p.status == OrderStatus::Open)),
         "third bid must succeed with ratio=2.0"
     );
     assert!(
-        !third.iter().any(|r| matches!(r, Response::OrderCanceled(_))),
+        !third
+            .iter()
+            .any(|r| matches!(r, Response::OrderCanceled(_))),
         "ratio=2.0 must allow quoting without auto-cancel"
     );
 }
@@ -547,11 +789,23 @@ fn test_cow_fok_full_fill_commits() {
     e.process(post_ask(maker.clone(), 50_000, 1, 1), 3);
 
     let responses = e.process(post_fok_bid(taker.clone(), 50_000, 1, 1), 4);
-    let fill = responses.iter().find_map(|r| if let Response::OrderFilled(f) = r { Some(f) } else { None });
-    assert!(fill.is_some(), "FOK should produce a fill when fully fillable");
+    let fill = responses.iter().find_map(|r| {
+        if let Response::OrderFilled(f) = r {
+            Some(f)
+        } else {
+            None
+        }
+    });
+    assert!(
+        fill.is_some(),
+        "FOK should produce a fill when fully fillable"
+    );
 
     let taker_btc = e.balances.get(&(taker, btc())).unwrap();
-    assert_eq!(taker_btc.available, QUANTITY_SCALE, "taker should have received BTC");
+    assert_eq!(
+        taker_btc.available, QUANTITY_SCALE,
+        "taker should have received BTC"
+    );
 
     let book = e.order_books.get(&btc_usdc()).unwrap();
     assert!(book.best_ask().is_none(), "maker ask consumed by FOK fill");
@@ -570,16 +824,35 @@ fn test_cow_fok_partial_fail_no_state_change() {
     let taker_usdc_before = e.balances.get(&(taker.clone(), usdc())).unwrap().available;
 
     let responses = e.process(post_fok_bid(taker.clone(), 50_000, 2, 1), 4);
-    let err = responses.iter().find_map(|r| if let Response::Error(e) = r { Some(e) } else { None }).unwrap();
+    let err = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(err.code, ErrorCode::FokNotFilled);
 
     let book = e.order_books.get(&btc_usdc()).unwrap();
-    assert!(book.best_ask().is_some(), "maker ask must still exist after FOK rollback");
+    assert!(
+        book.best_ask().is_some(),
+        "maker ask must still exist after FOK rollback"
+    );
 
     let taker_usdc_after = e.balances.get(&(taker.clone(), usdc())).unwrap().available;
-    assert_eq!(taker_usdc_before, taker_usdc_after, "taker balance unchanged after FOK failure");
+    assert_eq!(
+        taker_usdc_before, taker_usdc_after,
+        "taker balance unchanged after FOK failure"
+    );
 
-    let taker_btc = e.balances.get(&(taker, btc())).map(|b| b.available).unwrap_or(0);
+    let taker_btc = e
+        .balances
+        .get(&(taker, btc()))
+        .map(|b| b.available)
+        .unwrap_or(0);
     assert_eq!(taker_btc, 0, "taker receives no BTC after failed FOK");
 }
 
@@ -594,15 +867,33 @@ fn test_cow_ioc_partial_fill_commits_filled_portion() {
     e.process(post_ask(maker.clone(), 50_000, 1, 1), 3);
 
     let responses = e.process(post_ioc_bid(taker.clone(), 50_000, 2, 1), 4);
-    let fill = responses.iter().find_map(|r| if let Response::OrderFilled(f) = r { Some(f) } else { None }).unwrap();
-    assert_eq!(fill.quantity, QUANTITY_SCALE, "only available 1 BTC should be filled");
+    let fill = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderFilled(f) = r {
+                Some(f)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(
+        fill.quantity, QUANTITY_SCALE,
+        "only available 1 BTC should be filled"
+    );
 
     let taker_btc = e.balances.get(&(taker, btc())).unwrap().available;
-    assert_eq!(taker_btc, QUANTITY_SCALE, "taker receives exactly the filled quantity");
+    assert_eq!(
+        taker_btc, QUANTITY_SCALE,
+        "taker receives exactly the filled quantity"
+    );
 
     let book = e.order_books.get(&btc_usdc()).unwrap();
     assert!(book.best_ask().is_none(), "maker ask fully consumed");
-    assert!(book.best_bid().is_none(), "IOC remainder does not rest on book");
+    assert!(
+        book.best_bid().is_none(),
+        "IOC remainder does not rest on book"
+    );
 }
 
 #[test]
@@ -614,11 +905,23 @@ fn test_cow_ioc_no_fill_leaves_state_clean() {
     let available_before = e.balances.get(&(taker.clone(), usdc())).unwrap().available;
 
     let responses = e.process(post_ioc_bid(taker.clone(), 50_000, 1, 1), 2);
-    let posted = responses.iter().find_map(|r| if let Response::OrderPosted(p) = r { Some(p) } else { None }).unwrap();
+    let posted = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(posted.status, OrderStatus::Canceled);
 
     let available_after = e.balances.get(&(taker.clone(), usdc())).unwrap().available;
-    assert_eq!(available_before, available_after, "no balance change when IOC finds nothing");
+    assert_eq!(
+        available_before, available_after,
+        "no balance change when IOC finds nothing"
+    );
 
     let book = e.order_books.get(&btc_usdc()).unwrap();
     assert!(book.best_bid().is_none(), "IOC must not rest on book");
@@ -634,11 +937,23 @@ fn test_cow_validation_failure_leaves_state_clean() {
     let locked_after_first = e.balances.get(&(u.clone(), usdc())).unwrap().locked;
 
     let responses = e.process(post_bid(u.clone(), 50_000, 1, 2), 3);
-    let err = responses.iter().find_map(|r| if let Response::Error(e) = r { Some(e) } else { None }).unwrap();
+    let err = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(err.code, ErrorCode::InsufficientBalance);
 
     let locked_after_fail = e.balances.get(&(u.clone(), usdc())).unwrap().locked;
-    assert_eq!(locked_after_first, locked_after_fail, "failed order must not mutate locked balance");
+    assert_eq!(
+        locked_after_first, locked_after_fail,
+        "failed order must not mutate locked balance"
+    );
 }
 
 #[test]
@@ -652,14 +967,29 @@ fn test_cow_failed_order_does_not_corrupt_subsequent_order() {
     e.process(post_ask(maker.clone(), 50_000, 1, 1), 3);
 
     let fail_resp = e.process(post_fok_bid(taker.clone(), 50_000, 2, 1), 4);
-    assert!(fail_resp.iter().any(|r| matches!(r, Response::Error(_))), "first FOK should fail");
+    assert!(
+        fail_resp.iter().any(|r| matches!(r, Response::Error(_))),
+        "first FOK should fail"
+    );
 
     let ok_resp = e.process(post_bid(taker.clone(), 50_000, 1, 2), 5);
-    let fill = ok_resp.iter().find_map(|r| if let Response::OrderFilled(f) = r { Some(f) } else { None });
-    assert!(fill.is_some(), "subsequent GTC bid should still fill against maker");
+    let fill = ok_resp.iter().find_map(|r| {
+        if let Response::OrderFilled(f) = r {
+            Some(f)
+        } else {
+            None
+        }
+    });
+    assert!(
+        fill.is_some(),
+        "subsequent GTC bid should still fill against maker"
+    );
 
     let taker_btc = e.balances.get(&(taker, btc())).unwrap().available;
-    assert_eq!(taker_btc, QUANTITY_SCALE, "taker receives BTC from the successful GTC fill");
+    assert_eq!(
+        taker_btc, QUANTITY_SCALE,
+        "taker receives BTC from the successful GTC fill"
+    );
 }
 
 // ─── VEL-P2-02: Rolling 20-window nonce tests ─────────────────────────────────
@@ -671,8 +1001,9 @@ fn test_nonce_window_20_concurrent_non_sequential() {
     let u = user(1);
     e.process(deposit(u.clone(), usdc(), 10_000_000 * PRICE_SCALE), 1);
 
-    let nonces: [u64; 20] = [100, 5, 999, 3, 42, 77, 200, 1, 50, 88,
-                              300, 6, 400, 17, 501, 23, 600, 11, 700, 99];
+    let nonces: [u64; 20] = [
+        100, 5, 999, 3, 42, 77, 200, 1, 50, 88, 300, 6, 400, 17, 501, 23, 600, 11, 700, 99,
+    ];
     for &n in &nonces {
         let resp = e.process(post_bid(u.clone(), 1, 1, n), 2);
         assert!(
@@ -697,13 +1028,39 @@ fn test_nonce_window_21st_below_minimum_rejected() {
     }
     // min=1, window full — nonce == min is rejected
     let resp = e.process(post_bid(u.clone(), 1, 1, 1), 3);
-    let err = resp.iter().find_map(|r| if let Response::Error(e) = r { Some(e) } else { None }).unwrap();
-    assert_eq!(err.code, ErrorCode::InvalidNonce, "nonce equal to min must be rejected");
+    let err = resp
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(
+        err.code,
+        ErrorCode::InvalidNonce,
+        "nonce equal to min must be rejected"
+    );
 
     // nonce 0 is below min — also rejected
     let resp2 = e.process(post_bid(u.clone(), 1, 1, 0), 3);
-    let err2 = resp2.iter().find_map(|r| if let Response::Error(e) = r { Some(e) } else { None }).unwrap();
-    assert_eq!(err2.code, ErrorCode::InvalidNonce, "nonce below min must be rejected");
+    let err2 = resp2
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(
+        err2.code,
+        ErrorCode::InvalidNonce,
+        "nonce below min must be rejected"
+    );
 }
 
 /// Duplicate nonce is rejected even when the window is full (replay protection).
@@ -718,12 +1075,29 @@ fn test_nonce_window_duplicate_rejected_when_full() {
     }
     // nonce 15 is still in the window (> min=1) but already used
     let resp = e.process(post_bid(u.clone(), 1, 1, 15), 3);
-    let err = resp.iter().find_map(|r| if let Response::Error(e) = r { Some(e) } else { None }).unwrap();
-    assert_eq!(err.code, ErrorCode::InvalidNonce, "duplicate nonce must be rejected");
+    let err = resp
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(
+        err.code,
+        ErrorCode::InvalidNonce,
+        "duplicate nonce must be rejected"
+    );
 
     // The rejected replay must not have evicted the minimum — window still has 20 entries
     let meta = e.metadata.get(&u).unwrap();
-    assert_eq!(meta.order_id_count(), 20, "window size must not shrink on replay attempt");
+    assert_eq!(
+        meta.order_id_count(),
+        20,
+        "window size must not shrink on replay attempt"
+    );
 }
 
 /// After the window slides forward, nonces that fell below the new minimum are permanently rejected.
@@ -739,12 +1113,28 @@ fn test_nonce_window_evicted_nonce_below_new_min_rejected() {
     }
     // Submit nonce 21 — evicts min=1, window becomes {2..=21}, min=2
     let resp = e.process(post_bid(u.clone(), 1, 1, 21), 3);
-    assert!(resp.iter().any(|r| matches!(r, Response::OrderPosted(_))), "nonce 21 must be accepted");
+    assert!(
+        resp.iter().any(|r| matches!(r, Response::OrderPosted(_))),
+        "nonce 21 must be accepted"
+    );
 
     // Nonce 1 is now below the new min=2 — must be rejected even though it's no longer in the set
     let resp2 = e.process(post_bid(u.clone(), 1, 1, 1), 3);
-    let err = resp2.iter().find_map(|r| if let Response::Error(e) = r { Some(e) } else { None }).unwrap();
-    assert_eq!(err.code, ErrorCode::InvalidNonce, "evicted nonce below new minimum must be rejected");
+    let err = resp2
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(
+        err.code,
+        ErrorCode::InvalidNonce,
+        "evicted nonce below new minimum must be rejected"
+    );
 }
 
 /// NonceWindow serializes and deserializes correctly — nonce state survives a snapshot/restore cycle.
@@ -776,12 +1166,21 @@ fn test_nonce_window_snapshot_restore() {
     assert!(!w.accept(5), "nonce 5 must be rejected after restore");
     assert!(!w.accept(200), "nonce 200 must be rejected after restore");
     // A fresh nonce above the window contents is accepted
-    assert!(w.accept(300), "new nonce 300 must be accepted after restore");
+    assert!(
+        w.accept(300),
+        "new nonce 300 must be accepted after restore"
+    );
 }
 
 // ─── VEL-P2-03: Client order ID tests ─────────────────────────────────────────
 
-fn post_bid_with_coid(user: UserId, price: u64, qty: u64, nonce: u64, coid: Option<&str>) -> Request {
+fn post_bid_with_coid(
+    user: UserId,
+    price: u64,
+    qty: u64,
+    nonce: u64,
+    coid: Option<&str>,
+) -> Request {
     Request::PostOrder(PostOrderRequest {
         user,
         market: btc_usdc(),
@@ -812,15 +1211,30 @@ fn test_coid_submit_accepted_and_stored() {
     let u = user(1);
     e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
 
-    let resp = e.process(post_bid_with_coid(u.clone(), 50_000, 1, 1, Some("my-order-1")), 2);
-    let posted = resp.iter().find_map(|r| if let Response::OrderPosted(p) = r { Some(p) } else { None }).unwrap();
+    let resp = e.process(
+        post_bid_with_coid(u.clone(), 50_000, 1, 1, Some("my-order-1")),
+        2,
+    );
+    let posted = resp
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(posted.status, OrderStatus::Open);
     assert_eq!(posted.client_order_id.as_deref(), Some("my-order-1"));
 
     // The book should be able to find the order by client_order_id
     let book = e.order_books.get(&btc_usdc()).unwrap();
     let found = book.find_by_client_order_id(&u, "my-order-1");
-    assert!(found.is_some(), "client_order_id mapping must be stored in order book");
+    assert!(
+        found.is_some(),
+        "client_order_id mapping must be stored in order book"
+    );
     assert_eq!(found.unwrap(), posted.order_id);
 }
 
@@ -831,9 +1245,24 @@ fn test_coid_duplicate_same_user_rejected() {
     let u = user(1);
     e.process(deposit(u.clone(), usdc(), 200_000 * PRICE_SCALE), 1);
 
-    e.process(post_bid_with_coid(u.clone(), 50_000, 1, 1, Some("dup-id")), 2);
-    let resp = e.process(post_bid_with_coid(u.clone(), 50_000, 1, 2, Some("dup-id")), 3);
-    let err = resp.iter().find_map(|r| if let Response::Error(e) = r { Some(e) } else { None }).unwrap();
+    e.process(
+        post_bid_with_coid(u.clone(), 50_000, 1, 1, Some("dup-id")),
+        2,
+    );
+    let resp = e.process(
+        post_bid_with_coid(u.clone(), 50_000, 1, 2, Some("dup-id")),
+        3,
+    );
+    let err = resp
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(err.code, ErrorCode::DuplicateClientOrderId);
 }
 
@@ -846,11 +1275,23 @@ fn test_coid_same_id_different_users_both_accepted() {
     e.process(deposit(u1.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
     e.process(deposit(u2.clone(), usdc(), 100_000 * PRICE_SCALE), 2);
 
-    let r1 = e.process(post_bid_with_coid(u1.clone(), 50_000, 1, 1, Some("shared-id")), 3);
-    let r2 = e.process(post_bid_with_coid(u2.clone(), 50_000, 1, 1, Some("shared-id")), 4);
+    let r1 = e.process(
+        post_bid_with_coid(u1.clone(), 50_000, 1, 1, Some("shared-id")),
+        3,
+    );
+    let r2 = e.process(
+        post_bid_with_coid(u2.clone(), 50_000, 1, 1, Some("shared-id")),
+        4,
+    );
 
-    assert!(r1.iter().any(|r| matches!(r, Response::OrderPosted(_))), "user 1 order should be accepted");
-    assert!(r2.iter().any(|r| matches!(r, Response::OrderPosted(_))), "user 2 order should be accepted");
+    assert!(
+        r1.iter().any(|r| matches!(r, Response::OrderPosted(_))),
+        "user 1 order should be accepted"
+    );
+    assert!(
+        r2.iter().any(|r| matches!(r, Response::OrderPosted(_))),
+        "user 2 order should be accepted"
+    );
 }
 
 /// Cancel by client_order_id → order cancelled, mapping removed.
@@ -860,17 +1301,41 @@ fn test_coid_cancel_by_coid() {
     let u = user(1);
     e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
 
-    let resp = e.process(post_bid_with_coid(u.clone(), 50_000, 1, 1, Some("cancel-me")), 2);
-    let order_id = resp.iter().find_map(|r| if let Response::OrderPosted(p) = r { Some(p.order_id) } else { None }).unwrap();
+    let resp = e.process(
+        post_bid_with_coid(u.clone(), 50_000, 1, 1, Some("cancel-me")),
+        2,
+    );
+    let order_id = resp
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p.order_id)
+            } else {
+                None
+            }
+        })
+        .unwrap();
 
     let cancel_resp = e.process(cancel_by_coid(u.clone(), "cancel-me", 2), 3);
-    let canceled = cancel_resp.iter().find_map(|r| if let Response::OrderCanceled(c) = r { Some(c) } else { None }).unwrap();
+    let canceled = cancel_resp
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderCanceled(c) = r {
+                Some(c)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(canceled.order_id, order_id);
     assert_eq!(canceled.client_order_id.as_deref(), Some("cancel-me"));
 
     // Mapping must be gone
     let book = e.order_books.get(&btc_usdc()).unwrap();
-    assert!(book.find_by_client_order_id(&u, "cancel-me").is_none(), "mapping must be removed after cancel");
+    assert!(
+        book.find_by_client_order_id(&u, "cancel-me").is_none(),
+        "mapping must be removed after cancel"
+    );
 }
 
 /// Cancel by client_order_id that doesn't exist → clear error.
@@ -880,7 +1345,16 @@ fn test_coid_cancel_nonexistent_returns_error() {
     let u = user(1);
 
     let resp = e.process(cancel_by_coid(u.clone(), "ghost-id", 1), 1);
-    let err = resp.iter().find_map(|r| if let Response::Error(e) = r { Some(e) } else { None }).unwrap();
+    let err = resp
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(err.code, ErrorCode::OrderNotFound);
 }
 
@@ -911,14 +1385,20 @@ fn test_coid_fill_removes_mapping() {
 
     // Verify mapping exists before fill
     let book = e.order_books.get(&btc_usdc()).unwrap();
-    assert!(book.find_by_client_order_id(&maker, "maker-ask-1").is_some());
+    assert!(book
+        .find_by_client_order_id(&maker, "maker-ask-1")
+        .is_some());
 
     // Taker fills the maker's order completely
     e.process(post_bid(taker.clone(), 50_000, 1, 1), 4);
 
     // Mapping must be gone after fill
     let book = e.order_books.get(&btc_usdc()).unwrap();
-    assert!(book.find_by_client_order_id(&maker, "maker-ask-1").is_none(), "mapping removed after fill");
+    assert!(
+        book.find_by_client_order_id(&maker, "maker-ask-1")
+            .is_none(),
+        "mapping removed after fill"
+    );
 }
 
 /// client_order_id with invalid characters → rejected.
@@ -928,8 +1408,20 @@ fn test_coid_invalid_characters_rejected() {
     let u = user(1);
     e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
 
-    let resp = e.process(post_bid_with_coid(u.clone(), 50_000, 1, 1, Some("bad id!")), 2);
-    let err = resp.iter().find_map(|r| if let Response::Error(e) = r { Some(e) } else { None }).unwrap();
+    let resp = e.process(
+        post_bid_with_coid(u.clone(), 50_000, 1, 1, Some("bad id!")),
+        2,
+    );
+    let err = resp
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(err.code, ErrorCode::InvalidClientOrderId);
 }
 
@@ -941,8 +1433,20 @@ fn test_coid_too_long_rejected() {
     e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
 
     let long_id = "a".repeat(65);
-    let resp = e.process(post_bid_with_coid(u.clone(), 50_000, 1, 1, Some(&long_id)), 2);
-    let err = resp.iter().find_map(|r| if let Response::Error(e) = r { Some(e) } else { None }).unwrap();
+    let resp = e.process(
+        post_bid_with_coid(u.clone(), 50_000, 1, 1, Some(&long_id)),
+        2,
+    );
+    let err = resp
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     assert_eq!(err.code, ErrorCode::InvalidClientOrderId);
 }
 
@@ -955,7 +1459,9 @@ fn test_coid_exactly_64_chars_accepted() {
 
     let id_64 = "a".repeat(64);
     let resp = e.process(post_bid_with_coid(u.clone(), 50_000, 1, 1, Some(&id_64)), 2);
-    assert!(resp.iter().any(|r| matches!(r, Response::OrderPosted(p) if p.status == OrderStatus::Open)));
+    assert!(resp
+        .iter()
+        .any(|r| matches!(r, Response::OrderPosted(p) if p.status == OrderStatus::Open)));
 }
 
 // ─── VEL-P2-06: Auto-cancel on credit ratio breach ────────────────────────────
@@ -971,30 +1477,68 @@ fn test_credit_breach_auto_cancel_oldest_first() {
 
     // Bid at 70: notional=70. Locks 70. available=30, total_quoted=70. (oldest)
     let r_old = e.process(post_bid(maker.clone(), 70, 1, 1), 2);
-    let oid_old = r_old.iter()
-        .find_map(|r| if let Response::OrderPosted(p) = r { Some(p.order_id) } else { None })
+    let oid_old = r_old
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p.order_id)
+            } else {
+                None
+            }
+        })
         .unwrap();
 
     // Bid at 20: notional=20. Locks 20. available=10, total_quoted=90.
     let r_mid = e.process(post_bid(maker.clone(), 20, 1, 2), 3);
-    let oid_mid = r_mid.iter()
-        .find_map(|r| if let Response::OrderPosted(p) = r { Some(p.order_id) } else { None })
+    let oid_mid = r_mid
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p.order_id)
+            } else {
+                None
+            }
+        })
         .unwrap();
 
     // New bid at 50: notional=50. available=10 < 50. 90+50=140 > 100.
     // Auto-cancel oid_old (notional=70, oldest): total_quoted=20. 20+50=70 ≤ 100. Done.
     let r_in = e.process(post_bid(maker.clone(), 50, 1, 3), 4);
 
-    let canceled_ids: Vec<_> = r_in.iter()
-        .filter_map(|r| if let Response::OrderCanceled(c) = r { Some(c.order_id) } else { None })
+    let canceled_ids: Vec<_> = r_in
+        .iter()
+        .filter_map(|r| {
+            if let Response::OrderCanceled(c) = r {
+                Some(c.order_id)
+            } else {
+                None
+            }
+        })
         .collect();
-    assert!(canceled_ids.contains(&oid_old), "oldest order must be auto-cancelled");
-    assert!(!canceled_ids.contains(&oid_mid), "newer order must NOT be auto-cancelled");
+    assert!(
+        canceled_ids.contains(&oid_old),
+        "oldest order must be auto-cancelled"
+    );
+    assert!(
+        !canceled_ids.contains(&oid_mid),
+        "newer order must NOT be auto-cancelled"
+    );
 
-    let posted = r_in.iter()
-        .find_map(|r| if let Response::OrderPosted(p) = r { Some(p) } else { None })
+    let posted = r_in
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p)
+            } else {
+                None
+            }
+        })
         .unwrap();
-    assert_eq!(posted.status, OrderStatus::Open, "incoming order must be accepted after auto-cancel");
+    assert_eq!(
+        posted.status,
+        OrderStatus::Open,
+        "incoming order must be accepted after auto-cancel"
+    );
 }
 
 /// Multiple orders auto-cancelled (oldest first) until ratio satisfied.
@@ -1007,16 +1551,37 @@ fn test_credit_breach_multiple_cancels_until_ratio_satisfied() {
 
     // Three bids of 30 each. total_quoted=90, available=0.
     let r1 = e.process(post_bid(maker.clone(), 30, 1, 1), 2);
-    let oid1 = r1.iter()
-        .find_map(|r| if let Response::OrderPosted(p) = r { Some(p.order_id) } else { None })
+    let oid1 = r1
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p.order_id)
+            } else {
+                None
+            }
+        })
         .unwrap();
     let r2 = e.process(post_bid(maker.clone(), 30, 1, 2), 3);
-    let oid2 = r2.iter()
-        .find_map(|r| if let Response::OrderPosted(p) = r { Some(p.order_id) } else { None })
+    let oid2 = r2
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p.order_id)
+            } else {
+                None
+            }
+        })
         .unwrap();
     let r3 = e.process(post_bid(maker.clone(), 30, 1, 3), 4);
-    let oid3 = r3.iter()
-        .find_map(|r| if let Response::OrderPosted(p) = r { Some(p.order_id) } else { None })
+    let oid3 = r3
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p.order_id)
+            } else {
+                None
+            }
+        })
         .unwrap();
 
     // New bid at 50: 90+50=140 > 90.
@@ -1024,21 +1589,42 @@ fn test_credit_breach_multiple_cancels_until_ratio_satisfied() {
     // Cancel oid2 (30): total=30, 30+50=80 ≤ 90. Done.
     let r_in = e.process(post_bid(maker.clone(), 50, 1, 4), 5);
 
-    let canceled_ids: Vec<_> = r_in.iter()
-        .filter_map(|r| if let Response::OrderCanceled(c) = r { Some(c.order_id) } else { None })
+    let canceled_ids: Vec<_> = r_in
+        .iter()
+        .filter_map(|r| {
+            if let Response::OrderCanceled(c) = r {
+                Some(c.order_id)
+            } else {
+                None
+            }
+        })
         .collect();
     assert_eq!(canceled_ids.len(), 2, "two orders must be auto-cancelled");
     assert!(canceled_ids.contains(&oid1));
     assert!(canceled_ids.contains(&oid2));
-    assert!(!canceled_ids.contains(&oid3), "third (newest) order must survive");
+    assert!(
+        !canceled_ids.contains(&oid3),
+        "third (newest) order must survive"
+    );
 
-    let posted = r_in.iter()
-        .find_map(|r| if let Response::OrderPosted(p) = r { Some(p) } else { None })
+    let posted = r_in
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p)
+            } else {
+                None
+            }
+        })
         .unwrap();
     assert_eq!(posted.status, OrderStatus::Open);
 
     let meta = e.metadata.get(&maker).unwrap();
-    assert_eq!(meta.order_id_count(), 2, "two orders remain (oid3 + new order)");
+    assert_eq!(
+        meta.order_id_count(),
+        2,
+        "two orders remain (oid3 + new order)"
+    );
 }
 
 /// If the incoming order fails after auto-cancels, the delta rollback undoes the auto-cancels.
@@ -1051,8 +1637,15 @@ fn test_credit_breach_auto_cancel_rolled_back_on_order_failure() {
 
     // Resting bid at 80: locks 80. available=20. total_quoted=80.
     let r_rest = e.process(post_bid(maker.clone(), 80, 1, 1), 2);
-    let oid_rest = r_rest.iter()
-        .find_map(|r| if let Response::OrderPosted(p) = r { Some(p.order_id) } else { None })
+    let oid_rest = r_rest
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p.order_id)
+            } else {
+                None
+            }
+        })
         .unwrap();
 
     // FillOrKill bid at 30: notional=30. available=20 < 30.
@@ -1073,19 +1666,32 @@ fn test_credit_breach_auto_cancel_rolled_back_on_order_failure() {
         3,
     );
 
-    let err = r_fok.iter()
-        .find_map(|r| if let Response::Error(e) = r { Some(e) } else { None })
+    let err = r_fok
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
         .unwrap();
     assert_eq!(err.code, ErrorCode::FokNotFilled);
 
     // Original order must still exist (auto-cancel was rolled back with delta)
     let book = e.order_books.get(&btc_usdc()).unwrap();
-    assert!(book.get_order(oid_rest).is_some(), "auto-cancelled order must be restored on rollback");
+    assert!(
+        book.get_order(oid_rest).is_some(),
+        "auto-cancelled order must be restored on rollback"
+    );
 
     let meta = e.metadata.get(&maker).unwrap();
     assert!(meta.contains_order_id(oid_rest));
     let expected_notional = CreditSystem::compute_notional(80 * PRICE_SCALE, QUANTITY_SCALE);
-    assert_eq!(meta.total_quoted_notional, expected_notional, "total_quoted_notional must be unchanged after rollback");
+    assert_eq!(
+        meta.total_quoted_notional, expected_notional,
+        "total_quoted_notional must be unchanged after rollback"
+    );
 }
 
 /// MM with no open orders but notional > deposited → InsufficientBalance (hard floor, not auto-cancel).
@@ -1098,8 +1704,15 @@ fn test_credit_breach_no_open_orders_insufficient_balance() {
 
     // notional=80 > deposited=50 → hard floor rejection before credit path
     let r = e.process(post_bid(maker.clone(), 80, 1, 1), 2);
-    let err = r.iter()
-        .find_map(|r| if let Response::Error(e) = r { Some(e) } else { None })
+    let err = r
+        .iter()
+        .find_map(|r| {
+            if let Response::Error(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
         .unwrap();
     assert_eq!(err.code, ErrorCode::InsufficientBalance);
 
@@ -1116,11 +1729,27 @@ fn test_coid_survives_snapshot_restore() {
     let mut e = engine();
     let u = user(1);
     e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
-    let resp = e.process(post_bid_with_coid(u.clone(), 50_000, 1, 1, Some("persist-me")), 2);
-    let original_id = resp.iter().find_map(|r| if let Response::OrderPosted(p) = r { Some(p.order_id) } else { None }).unwrap();
+    let resp = e.process(
+        post_bid_with_coid(u.clone(), 50_000, 1, 1, Some("persist-me")),
+        2,
+    );
+    let original_id = resp
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderPosted(p) = r {
+                Some(p.order_id)
+            } else {
+                None
+            }
+        })
+        .unwrap();
 
     // Serialize the order book state (orders contain client_order_id)
-    let orders: Vec<types::Order> = e.order_books.values().flat_map(|b| b.all_orders()).collect();
+    let orders: Vec<types::Order> = e
+        .order_books
+        .values()
+        .flat_map(|b| b.all_orders())
+        .collect();
     let json = serde_json::to_string(&orders).unwrap();
     let restored_orders: Vec<types::Order> = serde_json::from_str(&json).unwrap();
 
@@ -1145,7 +1774,10 @@ fn test_coid_survives_snapshot_restore() {
     // The client_order_id index must be rebuilt
     let book2 = e2.order_books.get(&btc_usdc()).unwrap();
     let found = book2.find_by_client_order_id(&u, "persist-me");
-    assert!(found.is_some(), "client_order_id must survive snapshot/restore");
+    assert!(
+        found.is_some(),
+        "client_order_id must survive snapshot/restore"
+    );
     assert_eq!(found.unwrap(), original_id);
 }
 
@@ -1185,16 +1817,32 @@ fn test_fee_taker_deducted_from_taker_balance_bid() {
 
     e.process(post_bid(maker.clone(), 50_000, 1, 1), 3);
 
-    let taker_usdc_before = e.balances.get(&(taker.clone(), usdc())).map(|b| b.available).unwrap_or(0);
+    let taker_usdc_before = e
+        .balances
+        .get(&(taker.clone(), usdc()))
+        .map(|b| b.available)
+        .unwrap_or(0);
     let responses = e.process(post_ask(taker.clone(), 50_000, 1, 1), 4);
 
-    let fill = responses.iter().find_map(|r| if let Response::OrderFilled(f) = r { Some(f) } else { None }).unwrap();
+    let fill = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderFilled(f) = r {
+                Some(f)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     let taker_usdc_after = e.balances.get(&(taker.clone(), usdc())).unwrap().available;
 
     let fill_notional = CreditSystem::compute_notional(fill.price, fill.quantity);
     let expected_taker_fee = (fill_notional as i64 * 5) / 10_000;
     assert!(expected_taker_fee > 0, "taker fee must be positive");
-    assert_eq!(fill.taker_fee, expected_taker_fee, "fill.taker_fee must match computed fee");
+    assert_eq!(
+        fill.taker_fee, expected_taker_fee,
+        "fill.taker_fee must match computed fee"
+    );
     // Ask taker receives fill_notional credited then taker_fee debited from available
     assert_eq!(
         taker_usdc_after - taker_usdc_before,
@@ -1216,16 +1864,34 @@ fn test_fee_maker_rebate_credited_bid() {
     e.process(post_ask(maker.clone(), 50_000, 1, 1), 3);
 
     let responses = e.process(post_bid(taker.clone(), 50_000, 1, 1), 4);
-    let fill = responses.iter().find_map(|r| if let Response::OrderFilled(f) = r { Some(f) } else { None }).unwrap();
+    let fill = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderFilled(f) = r {
+                Some(f)
+            } else {
+                None
+            }
+        })
+        .unwrap();
 
     let fill_notional = fill.price / PRICE_SCALE * fill.quantity / QUANTITY_SCALE * PRICE_SCALE;
     let expected_maker_fee = (fill_notional as i64 * -1) / 10_000; // negative = rebate
-    assert!(expected_maker_fee < 0, "maker fee must be negative (rebate)");
+    assert!(
+        expected_maker_fee < 0,
+        "maker fee must be negative (rebate)"
+    );
 
     let maker_usdc = e.balances.get(&(maker.clone(), usdc())).unwrap().available;
     let expected_maker_usdc = fill_notional + expected_maker_fee.unsigned_abs();
-    assert_eq!(maker_usdc, expected_maker_usdc, "maker USDC must equal fill_notional + rebate");
-    assert_eq!(fill.maker_fee, expected_maker_fee, "fill.maker_fee must match computed rebate");
+    assert_eq!(
+        maker_usdc, expected_maker_usdc,
+        "maker USDC must equal fill_notional + rebate"
+    );
+    assert_eq!(
+        fill.maker_fee, expected_maker_fee,
+        "fill.maker_fee must match computed rebate"
+    );
 }
 
 /// Exchange fee_balances["USDC"] accumulates net fees (taker_fee - abs(maker_rebate)) after fills.
@@ -1240,13 +1906,28 @@ fn test_exchange_fee_balance_increases() {
     e.process(post_ask(maker.clone(), 50_000, 1, 1), 3);
 
     let responses = e.process(post_bid(taker.clone(), 50_000, 1, 1), 4);
-    let fill = responses.iter().find_map(|r| if let Response::OrderFilled(f) = r { Some(f) } else { None }).unwrap();
+    let fill = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderFilled(f) = r {
+                Some(f)
+            } else {
+                None
+            }
+        })
+        .unwrap();
 
     let net_fee = fill.taker_fee + fill.maker_fee;
-    assert!(net_fee > 0, "net exchange fee must be positive with default rates");
+    assert!(
+        net_fee > 0,
+        "net exchange fee must be positive with default rates"
+    );
 
     let fee_balance = e.fee_balances.get("USDC").copied().unwrap_or(0);
-    assert_eq!(fee_balance, net_fee as u64, "fee_balances[USDC] must equal net exchange fee");
+    assert_eq!(
+        fee_balance, net_fee as u64,
+        "fee_balances[USDC] must equal net exchange fee"
+    );
 }
 
 /// Fill response includes correct maker_fee and taker_fee amounts.
@@ -1262,8 +1943,15 @@ fn test_fill_response_includes_fee_amounts() {
     e.process(post_ask(maker.clone(), 51_000, 1, 2), 4);
 
     let responses = e.process(post_bid(taker.clone(), 51_000, 2, 1), 5);
-    let fills: Vec<_> = responses.iter()
-        .filter_map(|r| if let Response::OrderFilled(f) = r { Some(f) } else { None })
+    let fills: Vec<_> = responses
+        .iter()
+        .filter_map(|r| {
+            if let Response::OrderFilled(f) = r {
+                Some(f)
+            } else {
+                None
+            }
+        })
         .collect();
 
     assert_eq!(fills.len(), 2);
@@ -1290,19 +1978,46 @@ fn test_zero_fee_config_no_fees() {
     e.process(deposit(taker.clone(), btc(), 1 * QUANTITY_SCALE), 2);
     e.process(post_bid(maker.clone(), 50_000, 1, 1), 3);
 
-    let taker_usdc_before = e.balances.get(&(taker.clone(), usdc())).map(|b| b.available).unwrap_or(0);
+    let taker_usdc_before = e
+        .balances
+        .get(&(taker.clone(), usdc()))
+        .map(|b| b.available)
+        .unwrap_or(0);
     let responses = e.process(post_ask(taker.clone(), 50_000, 1, 1), 4);
-    let fill = responses.iter().find_map(|r| if let Response::OrderFilled(f) = r { Some(f) } else { None }).unwrap();
+    let fill = responses
+        .iter()
+        .find_map(|r| {
+            if let Response::OrderFilled(f) = r {
+                Some(f)
+            } else {
+                None
+            }
+        })
+        .unwrap();
 
-    assert_eq!(fill.taker_fee, 0, "taker fee must be 0 with zero fee config");
-    assert_eq!(fill.maker_fee, 0, "maker fee must be 0 with zero fee config");
+    assert_eq!(
+        fill.taker_fee, 0,
+        "taker fee must be 0 with zero fee config"
+    );
+    assert_eq!(
+        fill.maker_fee, 0,
+        "maker fee must be 0 with zero fee config"
+    );
 
     let taker_usdc_after = e.balances.get(&(taker.clone(), usdc())).unwrap().available;
     let fill_notional = CreditSystem::compute_notional(fill.price, fill.quantity);
     // Ask taker receives full fill_notional with no fee deduction
-    assert_eq!(taker_usdc_after - taker_usdc_before, fill_notional, "no fee deducted with zero config");
+    assert_eq!(
+        taker_usdc_after - taker_usdc_before,
+        fill_notional,
+        "no fee deducted with zero config"
+    );
 
-    assert_eq!(e.fee_balances.get("USDC").copied().unwrap_or(0), 0, "fee_balances stays zero");
+    assert_eq!(
+        e.fee_balances.get("USDC").copied().unwrap_or(0),
+        0,
+        "fee_balances stays zero"
+    );
 }
 
 /// Fee balances survive serialization and deserialization (snapshot/restore simulation).
@@ -1321,9 +2036,14 @@ fn test_fee_accumulation_snapshot_restore() {
     assert!(fee_before > 0, "fee_balances must be non-zero after fill");
 
     let serialized = serde_json::to_string(&e.fee_balances).unwrap();
-    let restored: std::collections::HashMap<String, u64> = serde_json::from_str(&serialized).unwrap();
+    let restored: std::collections::HashMap<String, u64> =
+        serde_json::from_str(&serialized).unwrap();
 
-    assert_eq!(restored.get("USDC").copied().unwrap_or(0), fee_before, "fee_balances survive serde round-trip");
+    assert_eq!(
+        restored.get("USDC").copied().unwrap_or(0),
+        fee_before,
+        "fee_balances survive serde round-trip"
+    );
 }
 
 /// Multiple fills accumulate fees correctly in fee_balances.
@@ -1348,9 +2068,19 @@ fn test_fee_multiple_fills_accumulate() {
     e.process(post_bid(taker.clone(), 50_000, 1, 3), 8);
     let after_third = e.fee_balances.get("USDC").copied().unwrap_or(0);
 
-    assert!(after_second > after_first, "fee_balances must increase after second fill");
-    assert!(after_third > after_second, "fee_balances must increase after third fill");
-    assert_eq!(after_third, after_first * 3, "fee_balances must be 3x single fill (identical fills)");
+    assert!(
+        after_second > after_first,
+        "fee_balances must increase after second fill"
+    );
+    assert!(
+        after_third > after_second,
+        "fee_balances must increase after third fill"
+    );
+    assert_eq!(
+        after_third,
+        after_first * 3,
+        "fee_balances must be 3x single fill (identical fills)"
+    );
 }
 
 /// Negative net fee (rebate > taker fee) does not panic — handled gracefully.
@@ -1365,8 +2095,8 @@ fn test_negative_net_fee_handled_gracefully() {
         min_order_size: 1,
         price_tick: 1,
         quantity_tick: 1,
-        maker_fee_bps: -10,  // large rebate: 10bps
-        taker_fee_bps: 1,    // small fee: 1bps
+        maker_fee_bps: -10, // large rebate: 10bps
+        taker_fee_bps: 1,   // small fee: 1bps
     });
 
     let maker = user(1);
@@ -1379,10 +2109,22 @@ fn test_negative_net_fee_handled_gracefully() {
 
     // Should not panic — net exchange fee is negative (exchange subsidizes)
     let responses = e.process(post_bid(taker.clone(), 50_000, 1, 1), 4);
-    let fill = responses.iter().find_map(|r| if let Response::OrderFilled(f) = r { Some(f) } else { None });
-    assert!(fill.is_some(), "fill must complete even with negative net fee");
+    let fill = responses.iter().find_map(|r| {
+        if let Response::OrderFilled(f) = r {
+            Some(f)
+        } else {
+            None
+        }
+    });
+    assert!(
+        fill.is_some(),
+        "fill must complete even with negative net fee"
+    );
 
     // fee_balances saturates at 0 if net is negative
     let fee_balance = e.fee_balances.get("USDC").copied().unwrap_or(0);
-    assert_eq!(fee_balance, 0, "fee_balances saturates at 0 on negative net fee");
+    assert_eq!(
+        fee_balance, 0,
+        "fee_balances saturates at 0 on negative net fee"
+    );
 }

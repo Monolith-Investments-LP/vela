@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use types::{Balance, Request, Response};
 use state::mpt::Hash;
 use state::StateKey;
+use types::{Balance, Request, Response};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ZkvmInput {
@@ -72,7 +72,11 @@ pub fn verify_execution(input: ZkvmInput) -> anyhow::Result<ZkvmOutput> {
 
     let balance_deltas: Vec<Balance> = engine.snapshot_balances().values().cloned().collect();
 
-    Ok(ZkvmOutput { post_root, responses: all_responses, balance_deltas })
+    Ok(ZkvmOutput {
+        post_root,
+        responses: all_responses,
+        balance_deltas,
+    })
 }
 
 /// Executes the STF from scratch (no pre-seeded state).  Suitable for batches
@@ -101,5 +105,9 @@ pub fn execute_stf(input: ZkvmInput) -> anyhow::Result<ZkvmOutput> {
 
     let balance_deltas: Vec<Balance> = engine.snapshot_balances().values().cloned().collect();
 
-    Ok(ZkvmOutput { post_root, responses: all_responses, balance_deltas })
+    Ok(ZkvmOutput {
+        post_root,
+        responses: all_responses,
+        balance_deltas,
+    })
 }

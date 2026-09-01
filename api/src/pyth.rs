@@ -1,21 +1,76 @@
-use std::sync::Arc;
-use rand::Rng;
-use crate::AppState;
 use crate::types::StoredFill;
+use crate::AppState;
+use rand::Rng;
+use std::sync::Arc;
 
 // (market_id, pyth_feed_id_hex, qty_min, qty_max) — quantities in native base units
 static FEEDS: &[(&str, &str, f64, f64)] = &[
-    ("BTC-USDC",  "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43", 0.001, 0.05),
-    ("ETH-USDC",  "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace", 0.01,  1.0),
-    ("SOL-USDC",  "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d", 1.0,   50.0),
-    ("AVAX-USDC", "93da3352f9f1d105fdfe4971cfa80e9dd777bfc5d0f683ebb6e1294b92137bb7", 0.5,   20.0),
-    ("MATIC-USDC","5de33a9112c2b700b8d30b8a3402c103578ccfa2765696471cc672bd5cf6ac52", 100.0, 5000.0),
-    ("LINK-USDC", "8ac0c70fff57e9aefdf5edf44b51d62c2d433653cbb2cf5cc06bb115af04d221", 5.0,   200.0),
-    ("UNI-USDC",  "78d185a741d07edb3412b09008b7c5cfb9bbbd7d568bf00ba737b456ba171501", 5.0,   100.0),
-    ("ARB-USDC",  "3fa4252848f9f0a1480be62745a4629d9eb1322aebab8a791e344b3b9c1adcf5", 100.0, 5000.0),
-    ("OP-USDC",   "385f64d993f7b77d8182ed5003d97c60aa3361f3cecfe711544d2d59165e9bab", 50.0,  2000.0),
-    ("AAVE-USDC", "2b9ab1e972a281585084148ba1389800799bd4be63b957507db1349314e47445", 0.1,   5.0),
-    ("DOGE-USDC", "dcef50dd0a4cd2dcc17e45df1676dcb336a11a61c69df7a0299b0150c672d25c", 500.0, 20000.0),
+    (
+        "BTC-USDC",
+        "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
+        0.001,
+        0.05,
+    ),
+    (
+        "ETH-USDC",
+        "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
+        0.01,
+        1.0,
+    ),
+    (
+        "SOL-USDC",
+        "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d",
+        1.0,
+        50.0,
+    ),
+    (
+        "AVAX-USDC",
+        "93da3352f9f1d105fdfe4971cfa80e9dd777bfc5d0f683ebb6e1294b92137bb7",
+        0.5,
+        20.0,
+    ),
+    (
+        "MATIC-USDC",
+        "5de33a9112c2b700b8d30b8a3402c103578ccfa2765696471cc672bd5cf6ac52",
+        100.0,
+        5000.0,
+    ),
+    (
+        "LINK-USDC",
+        "8ac0c70fff57e9aefdf5edf44b51d62c2d433653cbb2cf5cc06bb115af04d221",
+        5.0,
+        200.0,
+    ),
+    (
+        "UNI-USDC",
+        "78d185a741d07edb3412b09008b7c5cfb9bbbd7d568bf00ba737b456ba171501",
+        5.0,
+        100.0,
+    ),
+    (
+        "ARB-USDC",
+        "3fa4252848f9f0a1480be62745a4629d9eb1322aebab8a791e344b3b9c1adcf5",
+        100.0,
+        5000.0,
+    ),
+    (
+        "OP-USDC",
+        "385f64d993f7b77d8182ed5003d97c60aa3361f3cecfe711544d2d59165e9bab",
+        50.0,
+        2000.0,
+    ),
+    (
+        "AAVE-USDC",
+        "2b9ab1e972a281585084148ba1389800799bd4be63b957507db1349314e47445",
+        0.1,
+        5.0,
+    ),
+    (
+        "DOGE-USDC",
+        "dcef50dd0a4cd2dcc17e45df1676dcb336a11a61c69df7a0299b0150c672d25c",
+        500.0,
+        20000.0,
+    ),
 ];
 
 pub async fn pyth_feed_task(state: Arc<AppState>) {
@@ -150,9 +205,6 @@ fn extract_price(body: &serde_json::Value, feed_id: &str) -> Option<f64> {
             .and_then(|s| s.parse().ok())
             .or_else(|| v.as_i64())
     })?;
-    let expo: i32 = price_obj
-        .get("expo")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(-8) as i32;
+    let expo: i32 = price_obj.get("expo").and_then(|v| v.as_i64()).unwrap_or(-8) as i32;
     Some(raw as f64 * 10_f64.powi(expo))
 }

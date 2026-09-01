@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet};
-use serde_json;
-use types::{AssetId, Balance, Market, MarketId, UserId, UserMetadata};
 use crate::keys::StateKey;
 use crate::mpt::{Hash, MptStore};
+use serde_json;
+use std::collections::{HashMap, HashSet};
+use types::{AssetId, Balance, Market, MarketId, UserId, UserMetadata};
 
 pub struct StateCache {
     data: HashMap<Vec<u8>, Vec<u8>>,
@@ -28,20 +28,28 @@ impl StateCache {
     }
 
     pub fn set_balance(&mut self, balance: &Balance) {
-        let key = StateKey::Balance { user: balance.user.clone(), asset: balance.asset };
+        let key = StateKey::Balance {
+            user: balance.user.clone(),
+            asset: balance.asset,
+        };
         let val = serde_json::to_vec(balance)
             .expect("Balance serialization must not fail: all fields are serializable");
         self.raw_set(key, val);
     }
 
     pub fn get_balance(&self, user: &UserId, asset: &AssetId) -> Option<Balance> {
-        let key = StateKey::Balance { user: user.clone(), asset: *asset };
+        let key = StateKey::Balance {
+            user: user.clone(),
+            asset: *asset,
+        };
         let raw = self.raw_get(&key)?;
         serde_json::from_slice(raw).ok()
     }
 
     pub fn set_metadata(&mut self, meta: &UserMetadata) {
-        let key = StateKey::Metadata { user: meta.user.clone() };
+        let key = StateKey::Metadata {
+            user: meta.user.clone(),
+        };
         let val = serde_json::to_vec(meta)
             .expect("UserMetadata serialization must not fail: all fields are serializable");
         self.raw_set(key, val);
@@ -54,14 +62,18 @@ impl StateCache {
     }
 
     pub fn set_market(&mut self, market: &Market) {
-        let key = StateKey::MarketConfig { market: market.id.clone() };
+        let key = StateKey::MarketConfig {
+            market: market.id.clone(),
+        };
         let val = serde_json::to_vec(market)
             .expect("Market serialization must not fail: all fields are serializable");
         self.raw_set(key, val);
     }
 
     pub fn get_market(&self, market_id: &MarketId) -> Option<Market> {
-        let key = StateKey::MarketConfig { market: market_id.clone() };
+        let key = StateKey::MarketConfig {
+            market: market_id.clone(),
+        };
         let raw = self.raw_get(&key)?;
         serde_json::from_slice(raw).ok()
     }
@@ -102,21 +114,24 @@ impl StateCache {
     }
 
     pub fn all_balances(&self) -> Vec<Balance> {
-        self.data.iter()
+        self.data
+            .iter()
             .filter(|(k, _)| k.starts_with(b"bal:"))
             .filter_map(|(_, v)| serde_json::from_slice(v).ok())
             .collect()
     }
 
     pub fn all_metadata(&self) -> Vec<UserMetadata> {
-        self.data.iter()
+        self.data
+            .iter()
             .filter(|(k, _)| k.starts_with(b"meta:"))
             .filter_map(|(_, v)| serde_json::from_slice(v).ok())
             .collect()
     }
 
     pub fn all_markets(&self) -> Vec<Market> {
-        self.data.iter()
+        self.data
+            .iter()
             .filter(|(k, _)| k.starts_with(b"mkt:"))
             .filter_map(|(_, v)| serde_json::from_slice(v).ok())
             .collect()

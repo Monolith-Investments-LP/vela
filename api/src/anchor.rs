@@ -1,9 +1,9 @@
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use sha3::{Digest, Keccak256};
-use k256::ecdsa::SigningKey;
-use crate::AppState;
 use crate::types::AnchorRecord;
+use crate::AppState;
+use k256::ecdsa::SigningKey;
+use sha3::{Digest, Keccak256};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 const CHAIN_ID: u64 = 11155111;
 const GAS_LIMIT: u64 = 100_000;
@@ -89,7 +89,11 @@ fn operator_address(key_bytes: &[u8]) -> Result<[u8; 20], String> {
     Ok(addr)
 }
 
-async fn eth_rpc(url: &str, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+async fn eth_rpc(
+    url: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "jsonrpc": "2.0",
@@ -116,7 +120,9 @@ async fn send_anchor_tx(
     state_root: [u8; 32],
     orders_processed: u64,
 ) -> Result<String, String> {
-    let key_hex = operator_key_hex.strip_prefix("0x").unwrap_or(operator_key_hex);
+    let key_hex = operator_key_hex
+        .strip_prefix("0x")
+        .unwrap_or(operator_key_hex);
     let key_bytes = hex::decode(key_hex).map_err(|_| "invalid operator key".to_string())?;
     let signing_key = SigningKey::from_slice(&key_bytes).map_err(|e| e.to_string())?;
     let op_addr = operator_address(&key_bytes)?;
@@ -129,18 +135,14 @@ async fn send_anchor_tx(
     )
     .await?;
     let nonce_str = nonce_val.as_str().ok_or("bad nonce response")?;
-    let nonce = u64::from_str_radix(
-        nonce_str.strip_prefix("0x").unwrap_or(nonce_str),
-        16,
-    )
-    .map_err(|_| "failed to parse nonce")?;
+    let nonce = u64::from_str_radix(nonce_str.strip_prefix("0x").unwrap_or(nonce_str), 16)
+        .map_err(|_| "failed to parse nonce")?;
 
     let gas_price_val = eth_rpc(alchemy_url, "eth_gasPrice", serde_json::json!([])).await;
     let base_gas: u128 = match gas_price_val {
         Ok(v) => {
             let s = v.as_str().unwrap_or("0x77359400");
-            u128::from_str_radix(s.strip_prefix("0x").unwrap_or(s), 16)
-                .unwrap_or(2_000_000_000)
+            u128::from_str_radix(s.strip_prefix("0x").unwrap_or(s), 16).unwrap_or(2_000_000_000)
         }
         Err(_) => 2_000_000_000u128,
     };
@@ -222,10 +224,7 @@ async fn send_anchor_tx(
     )
     .await?;
 
-    let tx_hash = result
-        .as_str()
-        .ok_or("no tx hash in response")?
-        .to_string();
+    let tx_hash = result.as_str().ok_or("no tx hash in response")?.to_string();
     Ok(tx_hash)
 }
 
@@ -270,7 +269,10 @@ pub async fn load_anchors() -> Option<(Vec<AnchorRecord>, u64)> {
 
 async fn save_anchors(anchors: &[AnchorRecord], count: u64) -> anyhow::Result<()> {
     let path = anchors_path();
-    let p = AnchorsPersisted { count, anchors: anchors.to_vec() };
+    let p = AnchorsPersisted {
+        count,
+        anchors: anchors.to_vec(),
+    };
     let json = serde_json::to_vec(&p)?;
     let tmp = format!("{path}.tmp");
     tokio::fs::write(&tmp, &json).await?;
@@ -290,7 +292,14 @@ pub async fn anchor_task(state: Arc<AppState>, alchemy_url: String, operator_key
             .unwrap_or_default()
             .as_millis() as u64;
 
-        match send_anchor_tx(&alchemy_url, &operator_key, state_root_bytes, orders_processed).await {
+        match send_anchor_tx(
+            &alchemy_url,
+            &operator_key,
+            state_root_bytes,
+            orders_processed,
+        )
+        .await
+        {
             Ok(tx_hash) => {
                 let anchor_id = state.anchor_count.fetch_add(1, Ordering::Relaxed);
 

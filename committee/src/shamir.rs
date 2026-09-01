@@ -73,7 +73,11 @@ fn sub_raw(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
 /// (a + b) mod MODULUS.
 fn fr_add(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
     let r = add_raw(a, b);
-    if geq(&r, &MODULUS) { sub_raw(&r, &MODULUS) } else { r }
+    if geq(&r, &MODULUS) {
+        sub_raw(&r, &MODULUS)
+    } else {
+        r
+    }
 }
 
 /// (a - b) mod MODULUS.
@@ -88,8 +92,12 @@ fn fr_sub(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
 /// Reduce a 256-bit value (possibly >= MODULUS) into [0, MODULUS).
 fn reduce_256(a: &[u64; 4]) -> [u64; 4] {
     let mut r = *a;
-    if geq(&r, &MODULUS) { r = sub_raw(&r, &MODULUS); }
-    if geq(&r, &MODULUS) { r = sub_raw(&r, &MODULUS); }
+    if geq(&r, &MODULUS) {
+        r = sub_raw(&r, &MODULUS);
+    }
+    if geq(&r, &MODULUS) {
+        r = sub_raw(&r, &MODULUS);
+    }
     r
 }
 
@@ -282,24 +290,34 @@ impl Fr {
 
 impl std::ops::Add for Fr {
     type Output = Fr;
-    fn add(self, other: Fr) -> Fr { Fr(fr_add(&self.0, &other.0)) }
+    fn add(self, other: Fr) -> Fr {
+        Fr(fr_add(&self.0, &other.0))
+    }
 }
 
 impl std::ops::Sub for Fr {
     type Output = Fr;
-    fn sub(self, other: Fr) -> Fr { Fr(fr_sub(&self.0, &other.0)) }
+    fn sub(self, other: Fr) -> Fr {
+        Fr(fr_sub(&self.0, &other.0))
+    }
 }
 
 impl std::ops::Neg for Fr {
     type Output = Fr;
     fn neg(self) -> Fr {
-        if self == Fr::ZERO { Fr::ZERO } else { Fr(sub_raw(&MODULUS, &self.0)) }
+        if self == Fr::ZERO {
+            Fr::ZERO
+        } else {
+            Fr(sub_raw(&MODULUS, &self.0))
+        }
     }
 }
 
 impl std::ops::Mul for Fr {
     type Output = Fr;
-    fn mul(self, other: Fr) -> Fr { Fr(fr_mul(&self.0, &other.0)) }
+    fn mul(self, other: Fr) -> Fr {
+        Fr(fr_mul(&self.0, &other.0))
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -387,7 +405,9 @@ pub fn lagrange_coefficient(j: u8, set: &[u8]) -> Result<Fr> {
 
     let num_fr = Fr::from_u128(num);
     let den_fr = Fr::from_u128(den_abs);
-    let den_inv = den_fr.inv().ok_or_else(|| anyhow::anyhow!("zero Lagrange denominator"))?;
+    let den_inv = den_fr
+        .inv()
+        .ok_or_else(|| anyhow::anyhow!("zero Lagrange denominator"))?;
 
     let lambda = num_fr * den_inv;
     Ok(if den_neg { -lambda } else { lambda })

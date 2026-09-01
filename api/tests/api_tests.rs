@@ -1,9 +1,12 @@
-use std::sync::Arc;
 use api::AppState;
 use axum_test::TestServer;
 use engine::MatchingEngine;
 use serde_json::{json, Value};
-use types::{AssetId, DepositRequest, FeeConfig, Market, MarketId, OrderSide, OrderType, PostOrderRequest, Request, PRICE_SCALE, QUANTITY_SCALE};
+use std::sync::Arc;
+use types::{
+    AssetId, DepositRequest, FeeConfig, Market, MarketId, OrderSide, OrderType, PostOrderRequest,
+    Request, PRICE_SCALE, QUANTITY_SCALE,
+};
 
 fn make_wal() -> Arc<api::wal::Wal> {
     let dir = std::env::temp_dir().join(format!(
@@ -39,18 +42,24 @@ fn engine_with_market() -> MatchingEngine {
 fn funded_engine() -> EngineWithUser {
     let mut e = engine_with_market();
     let user = types::UserId::from_hex(&user_addr()).unwrap();
-    e.process(Request::Deposit(DepositRequest {
-        user: user.clone(),
-        asset: AssetId::from_str("USDC"),
-        amount: 100_000 * PRICE_SCALE,
-        l1_tx_hash: [0u8; 32],
-    }), 1);
-    e.process(Request::Deposit(DepositRequest {
-        user: user.clone(),
-        asset: AssetId::from_str("BTC"),
-        amount: 2 * QUANTITY_SCALE,
-        l1_tx_hash: [1u8; 32],
-    }), 2);
+    e.process(
+        Request::Deposit(DepositRequest {
+            user: user.clone(),
+            asset: AssetId::from_str("USDC"),
+            amount: 100_000 * PRICE_SCALE,
+            l1_tx_hash: [0u8; 32],
+        }),
+        1,
+    );
+    e.process(
+        Request::Deposit(DepositRequest {
+            user: user.clone(),
+            asset: AssetId::from_str("BTC"),
+            amount: 2 * QUANTITY_SCALE,
+            l1_tx_hash: [1u8; 32],
+        }),
+        2,
+    );
     EngineWithUser { engine: e, user }
 }
 
@@ -109,7 +118,9 @@ async fn test_get_book_not_found() {
 #[tokio::test]
 async fn test_get_balances_empty() {
     let server = test_server(engine_with_market());
-    let resp = server.get(&format!("/account/{}/balances", user_addr())).await;
+    let resp = server
+        .get(&format!("/account/{}/balances", user_addr()))
+        .await;
     resp.assert_status_ok();
     let body: Value = resp.json();
     assert_eq!(body["ok"], true);
@@ -120,15 +131,20 @@ async fn test_get_balances_empty() {
 async fn test_get_balances_after_deposit() {
     let mut e = engine_with_market();
     let user = types::UserId::from_hex(&user_addr()).unwrap();
-    e.process(Request::Deposit(DepositRequest {
-        user: user.clone(),
-        asset: AssetId::from_str("USDC"),
-        amount: 50_000 * PRICE_SCALE,
-        l1_tx_hash: [0u8; 32],
-    }), 1);
+    e.process(
+        Request::Deposit(DepositRequest {
+            user: user.clone(),
+            asset: AssetId::from_str("USDC"),
+            amount: 50_000 * PRICE_SCALE,
+            l1_tx_hash: [0u8; 32],
+        }),
+        1,
+    );
 
     let server = test_server(e);
-    let resp = server.get(&format!("/account/{}/balances", user_addr())).await;
+    let resp = server
+        .get(&format!("/account/{}/balances", user_addr()))
+        .await;
     resp.assert_status_ok();
     let body: Value = resp.json();
     let balances = body["data"].as_array().unwrap();
@@ -179,28 +195,41 @@ async fn test_get_order_by_client_id_found() {
     let mut e = engine_with_market();
 
     // Deposit funds and place a resting order with a client_order_id directly through the engine.
-    e.process(Request::Deposit(DepositRequest {
-        user: user_id.clone(),
-        asset: AssetId::from_str("USDC"),
-        amount: 100_000 * PRICE_SCALE,
-        l1_tx_hash: [0u8; 32],
-    }), 1);
+    e.process(
+        Request::Deposit(DepositRequest {
+            user: user_id.clone(),
+            asset: AssetId::from_str("USDC"),
+            amount: 100_000 * PRICE_SCALE,
+            l1_tx_hash: [0u8; 32],
+        }),
+        1,
+    );
 
-    let resp = e.process(Request::PostOrder(PostOrderRequest {
-        user: user_id.clone(),
-        market: MarketId::new("BTC", "USDC"),
-        side: OrderSide::Bid,
-        order_type: OrderType::GoodTillCanceled,
-        price: 50_000 * PRICE_SCALE,
-        quantity: 1 * QUANTITY_SCALE,
-        nonce: 42,
-        client_order_id: Some("test-coid-api".to_string()),
-        signature: vec![0u8; 65],
-    }), 2);
+    let resp = e.process(
+        Request::PostOrder(PostOrderRequest {
+            user: user_id.clone(),
+            market: MarketId::new("BTC", "USDC"),
+            side: OrderSide::Bid,
+            order_type: OrderType::GoodTillCanceled,
+            price: 50_000 * PRICE_SCALE,
+            quantity: 1 * QUANTITY_SCALE,
+            nonce: 42,
+            client_order_id: Some("test-coid-api".to_string()),
+            signature: vec![0u8; 65],
+        }),
+        2,
+    );
 
-    let order_id = resp.iter().find_map(|r| {
-        if let types::Response::OrderPosted(p) = r { Some(p.order_id) } else { None }
-    }).expect("order must be posted");
+    let order_id = resp
+        .iter()
+        .find_map(|r| {
+            if let types::Response::OrderPosted(p) = r {
+                Some(p.order_id)
+            } else {
+                None
+            }
+        })
+        .expect("order must be posted");
 
     let server = test_server(e);
     let endpoint = format!("/account/{}/orders/by-client-id/test-coid-api", user_addr());
@@ -225,11 +254,11 @@ async fn test_get_order_by_client_id_not_found() {
 
 mod ws_tests {
     use super::*;
-    use std::time::Duration;
     use axum_test::TestServerConfig;
     use axum_test::TestWebSocket;
-    use k256::ecdsa::{SigningKey, Signature, RecoveryId};
+    use k256::ecdsa::{RecoveryId, Signature, SigningKey};
     use sha3::{Digest, Keccak256};
+    use std::time::Duration;
 
     /// Create a server that shares its AppState with the caller so tests can
     /// inject events directly via `state.feeds`.  WS requires HTTP transport.
@@ -237,17 +266,14 @@ mod ws_tests {
         let state = AppState::new(engine, super::make_wal());
         let state_clone = state.clone();
         let config = TestServerConfig::builder().http_transport().build();
-        let server = axum_test::TestServer::new_with_config(
-            api::build_router(state),
-            config,
-        )
-        .unwrap();
+        let server =
+            axum_test::TestServer::new_with_config(api::build_router(state), config).unwrap();
         (server, state_clone)
     }
 
     /// Deterministic test key derived from an integer seed.
     fn test_key(seed: u64) -> SigningKey {
-        use rand::{SeedableRng, rngs::StdRng};
+        use rand::{rngs::StdRng, SeedableRng};
         let mut rng = StdRng::seed_from_u64(seed);
         SigningKey::random(&mut rng)
     }
@@ -264,8 +290,7 @@ mod ws_tests {
     fn sign_auth(key: &SigningKey, nonce: &str) -> String {
         let msg = api::auth::auth_signing_message(nonce);
         let hash = api::auth::eth_message_hash(&msg);
-        let (sig, rid): (Signature, RecoveryId) =
-            key.sign_prehash_recoverable(&hash).unwrap();
+        let (sig, rid): (Signature, RecoveryId) = key.sign_prehash_recoverable(&hash).unwrap();
         let mut bytes = [0u8; 65];
         bytes[..64].copy_from_slice(&sig.to_bytes());
         bytes[64] = rid.to_byte();
@@ -311,11 +336,7 @@ mod ws_tests {
         );
 
         // Nothing should arrive within 100 ms.
-        let result = tokio::time::timeout(
-            Duration::from_millis(100),
-            ws.receive_text(),
-        )
-        .await;
+        let result = tokio::time::timeout(Duration::from_millis(100), ws.receive_text()).await;
         assert!(
             result.is_err(),
             "unauthenticated connection must not receive private events"
@@ -352,12 +373,9 @@ mod ws_tests {
             },
         );
 
-        let fill: Value = tokio::time::timeout(
-            Duration::from_millis(500),
-            ws.receive_json(),
-        )
-        .await
-        .expect("authenticated connection should receive its own fill within 500 ms");
+        let fill: Value = tokio::time::timeout(Duration::from_millis(500), ws.receive_json())
+            .await
+            .expect("authenticated connection should receive its own fill within 500 ms");
 
         assert_eq!(fill["type"], "fill");
         assert_eq!(fill["price"], "50000");
@@ -392,11 +410,7 @@ mod ws_tests {
         );
 
         // User A must not receive user B's event.
-        let result = tokio::time::timeout(
-            Duration::from_millis(100),
-            ws_a.receive_text(),
-        )
-        .await;
+        let result = tokio::time::timeout(Duration::from_millis(100), ws_a.receive_text()).await;
         assert!(
             result.is_err(),
             "user A must not receive user B's private events"

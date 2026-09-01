@@ -58,10 +58,7 @@ mod hex_serde {
 
 /// Compressed BLS12-381 G1 affine point (48 bytes), hex-serialized.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct G1Affine(
-    #[serde(with = "hex_serde::bytes48")]
-    pub [u8; 48],
-);
+pub struct G1Affine(#[serde(with = "hex_serde::bytes48")] pub [u8; 48]);
 
 /// Partial decryption share from one committee node.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -197,7 +194,12 @@ impl AssetId {
     }
 
     pub fn as_str(&self) -> &str {
-        let end = self.0.iter().rposition(|&b| b != 0).map(|i| i + 1).unwrap_or(0);
+        let end = self
+            .0
+            .iter()
+            .rposition(|&b| b != 0)
+            .map(|i| i + 1)
+            .unwrap_or(0);
         std::str::from_utf8(&self.0[..end]).unwrap_or("")
     }
 }
@@ -336,7 +338,9 @@ mod open_order_ids_serde {
         v.serialize(serializer)
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[OrderId; 64], D::Error> {
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<[OrderId; 64], D::Error> {
         let v = Vec::<OrderId>::deserialize(deserializer)?;
         let mut arr = [0u64; 64];
         for (i, &id) in v.iter().take(64).enumerate() {
@@ -423,7 +427,8 @@ impl NonceWindow {
         }
 
         // Window full: find minimum and enforce monotonic advance.
-        let (min_idx, &min_val) = self.window
+        let (min_idx, &min_val) = self
+            .window
             .iter()
             .enumerate()
             .min_by_key(|(_, &v)| v)
@@ -447,12 +452,20 @@ impl NonceWindow {
     }
 
     pub fn contains(&self, nonce: Nonce) -> bool {
-        let active = if self.len < NONCE_WINDOW_SIZE { &self.window[..self.len] } else { &self.window };
+        let active = if self.len < NONCE_WINDOW_SIZE {
+            &self.window[..self.len]
+        } else {
+            &self.window
+        };
         active.contains(&nonce)
     }
 
     pub fn iter_active(&self) -> impl Iterator<Item = Nonce> + '_ {
-        let active = if self.len < NONCE_WINDOW_SIZE { &self.window[..self.len] } else { &self.window };
+        let active = if self.len < NONCE_WINDOW_SIZE {
+            &self.window[..self.len]
+        } else {
+            &self.window
+        };
         active.iter().copied()
     }
 
@@ -536,8 +549,12 @@ impl Default for FeeConfig {
     }
 }
 
-fn default_maker_fee_bps() -> i64 { -1 }
-fn default_taker_fee_bps() -> i64 { 5 }
+fn default_maker_fee_bps() -> i64 {
+    -1
+}
+fn default_taker_fee_bps() -> i64 {
+    5
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Market {

@@ -1,9 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use engine::MatchingEngine;
 use types::{
-    AssetId, CancelOrderRequest, DepositRequest, FeeConfig, Market, MarketId,
-    OrderSide, OrderType, PostOrderRequest, Request, Response, UserId,
-    PRICE_SCALE, QUANTITY_SCALE,
+    AssetId, CancelOrderRequest, DepositRequest, FeeConfig, Market, MarketId, OrderSide, OrderType,
+    PostOrderRequest, Request, Response, UserId, PRICE_SCALE, QUANTITY_SCALE,
 };
 
 const MARKET_BASES: &[&str] = &[
@@ -47,7 +46,12 @@ fn dep_req(user: UserId, asset: AssetId, amount: u64, idx: u32) -> Request {
     h[29] = (idx >> 16) as u8;
     h[30] = (idx >> 8) as u8;
     h[31] = idx as u8;
-    Request::Deposit(DepositRequest { user, asset, amount, l1_tx_hash: h })
+    Request::Deposit(DepositRequest {
+        user,
+        asset,
+        amount,
+        l1_tx_hash: h,
+    })
 }
 
 fn post_req(
@@ -98,7 +102,10 @@ fn setup_realistic_mm() -> (MatchingEngine, Vec<Request>) {
     engine.process(dep_req(taker.clone(), usdc.clone(), large, dep_idx), 0);
     dep_idx += 1;
     for base in MARKET_BASES {
-        engine.process(dep_req(taker.clone(), AssetId::from_str(base), large, dep_idx), 0);
+        engine.process(
+            dep_req(taker.clone(), AssetId::from_str(base), large, dep_idx),
+            0,
+        );
         dep_idx += 1;
     }
 
@@ -107,7 +114,10 @@ fn setup_realistic_mm() -> (MatchingEngine, Vec<Request>) {
         engine.process(dep_req(mm.clone(), usdc.clone(), large, dep_idx), 0);
         dep_idx += 1;
         for base in MARKET_BASES {
-            engine.process(dep_req(mm.clone(), AssetId::from_str(base), large, dep_idx), 0);
+            engine.process(
+                dep_req(mm.clone(), AssetId::from_str(base), large, dep_idx),
+                0,
+            );
             dep_idx += 1;
         }
     }
@@ -123,7 +133,15 @@ fn setup_realistic_mm() -> (MatchingEngine, Vec<Request>) {
                 nonces[mm_i as usize] += 1;
                 let bid_price = (1_000 + mm_i as u64 * 2 + slot) * PRICE_SCALE;
                 let resps = engine.process(
-                    post_req(mm.clone(), mid.clone(), OrderSide::Bid, OrderType::GoodTillCanceled, bid_price, QUANTITY_SCALE, nonces[mm_i as usize]),
+                    post_req(
+                        mm.clone(),
+                        mid.clone(),
+                        OrderSide::Bid,
+                        OrderType::GoodTillCanceled,
+                        bid_price,
+                        QUANTITY_SCALE,
+                        nonces[mm_i as usize],
+                    ),
                     1,
                 );
                 for r in &resps {
@@ -135,7 +153,15 @@ fn setup_realistic_mm() -> (MatchingEngine, Vec<Request>) {
                 nonces[mm_i as usize] += 1;
                 let ask_price = (1_200 + mm_i as u64 * 2 + slot) * PRICE_SCALE;
                 let resps = engine.process(
-                    post_req(mm.clone(), mid.clone(), OrderSide::Ask, OrderType::GoodTillCanceled, ask_price, QUANTITY_SCALE, nonces[mm_i as usize]),
+                    post_req(
+                        mm.clone(),
+                        mid.clone(),
+                        OrderSide::Ask,
+                        OrderType::GoodTillCanceled,
+                        ask_price,
+                        QUANTITY_SCALE,
+                        nonces[mm_i as usize],
+                    ),
                     1,
                 );
                 for r in &resps {
@@ -163,7 +189,15 @@ fn setup_realistic_mm() -> (MatchingEngine, Vec<Request>) {
             OrderSide::Ask => (1_210 + (i as u64 % 20)) * PRICE_SCALE,
         };
         nonces[mm_i as usize] += 1;
-        requests.push(post_req(mm, mid, side, OrderType::GoodTillCanceled, new_price, QUANTITY_SCALE, nonces[mm_i as usize]));
+        requests.push(post_req(
+            mm,
+            mid,
+            side,
+            OrderType::GoodTillCanceled,
+            new_price,
+            QUANTITY_SCALE,
+            nonces[mm_i as usize],
+        ));
     }
 
     for i in 0usize..200 {
@@ -192,21 +226,54 @@ fn setup_post_gtc() -> (MatchingEngine, Request) {
 
     for i in 1u32..=50 {
         let u = uid(i);
-        engine.process(dep_req(u.clone(), usdc.clone(), 1_000_000 * PRICE_SCALE, i), 0);
-        engine.process(dep_req(u.clone(), btc.clone(), 1_000_000 * QUANTITY_SCALE, 100 + i), 0);
         engine.process(
-            post_req(u.clone(), mid.clone(), OrderSide::Bid, OrderType::GoodTillCanceled, (90_000 - i as u64 * 10) * PRICE_SCALE, QUANTITY_SCALE, 1),
+            dep_req(u.clone(), usdc.clone(), 1_000_000 * PRICE_SCALE, i),
+            0,
+        );
+        engine.process(
+            dep_req(u.clone(), btc.clone(), 1_000_000 * QUANTITY_SCALE, 100 + i),
+            0,
+        );
+        engine.process(
+            post_req(
+                u.clone(),
+                mid.clone(),
+                OrderSide::Bid,
+                OrderType::GoodTillCanceled,
+                (90_000 - i as u64 * 10) * PRICE_SCALE,
+                QUANTITY_SCALE,
+                1,
+            ),
             1,
         );
         engine.process(
-            post_req(u.clone(), mid.clone(), OrderSide::Ask, OrderType::GoodTillCanceled, (110_000 + i as u64 * 10) * PRICE_SCALE, QUANTITY_SCALE, 2),
+            post_req(
+                u.clone(),
+                mid.clone(),
+                OrderSide::Ask,
+                OrderType::GoodTillCanceled,
+                (110_000 + i as u64 * 10) * PRICE_SCALE,
+                QUANTITY_SCALE,
+                2,
+            ),
             1,
         );
     }
 
     let poster = uid(99);
-    engine.process(dep_req(poster.clone(), usdc.clone(), 1_000_000 * PRICE_SCALE, 200), 0);
-    let req = post_req(poster, mid, OrderSide::Bid, OrderType::GoodTillCanceled, 80_000 * PRICE_SCALE, QUANTITY_SCALE, 1);
+    engine.process(
+        dep_req(poster.clone(), usdc.clone(), 1_000_000 * PRICE_SCALE, 200),
+        0,
+    );
+    let req = post_req(
+        poster,
+        mid,
+        OrderSide::Bid,
+        OrderType::GoodTillCanceled,
+        80_000 * PRICE_SCALE,
+        QUANTITY_SCALE,
+        1,
+    );
     (engine, req)
 }
 
@@ -218,13 +285,27 @@ fn setup_cancel() -> (MatchingEngine, Request) {
     engine.add_market(make_market("BTC"));
 
     let u = uid(1);
-    engine.process(dep_req(u.clone(), usdc.clone(), 1_000_000_000 * PRICE_SCALE, 0), 0);
-    engine.process(dep_req(u.clone(), btc.clone(), 1_000_000_000 * QUANTITY_SCALE, 1), 0);
+    engine.process(
+        dep_req(u.clone(), usdc.clone(), 1_000_000_000 * PRICE_SCALE, 0),
+        0,
+    );
+    engine.process(
+        dep_req(u.clone(), btc.clone(), 1_000_000_000 * QUANTITY_SCALE, 1),
+        0,
+    );
 
     let mut cancel_id = 0u64;
     for i in 1u64..=100 {
         let resps = engine.process(
-            post_req(u.clone(), mid.clone(), OrderSide::Bid, OrderType::GoodTillCanceled, (50_000 + i * 10) * PRICE_SCALE, QUANTITY_SCALE, i),
+            post_req(
+                u.clone(),
+                mid.clone(),
+                OrderSide::Bid,
+                OrderType::GoodTillCanceled,
+                (50_000 + i * 10) * PRICE_SCALE,
+                QUANTITY_SCALE,
+                i,
+            ),
             1,
         );
         if i == 50 {
@@ -237,7 +318,15 @@ fn setup_cancel() -> (MatchingEngine, Request) {
     }
     for i in 101u64..=200 {
         engine.process(
-            post_req(u.clone(), mid.clone(), OrderSide::Ask, OrderType::GoodTillCanceled, (150_000 + (i - 100) * 10) * PRICE_SCALE, QUANTITY_SCALE, i),
+            post_req(
+                u.clone(),
+                mid.clone(),
+                OrderSide::Ask,
+                OrderType::GoodTillCanceled,
+                (150_000 + (i - 100) * 10) * PRICE_SCALE,
+                QUANTITY_SCALE,
+                i,
+            ),
             1,
         );
     }
@@ -255,13 +344,35 @@ fn setup_fill() -> (MatchingEngine, Request) {
 
     let maker = uid(1);
     let taker = uid(2);
-    engine.process(dep_req(maker.clone(), btc.clone(), 1_000_000 * QUANTITY_SCALE, 0), 0);
     engine.process(
-        post_req(maker, mid.clone(), OrderSide::Ask, OrderType::GoodTillCanceled, 100_000 * PRICE_SCALE, QUANTITY_SCALE, 1),
+        dep_req(maker.clone(), btc.clone(), 1_000_000 * QUANTITY_SCALE, 0),
+        0,
+    );
+    engine.process(
+        post_req(
+            maker,
+            mid.clone(),
+            OrderSide::Ask,
+            OrderType::GoodTillCanceled,
+            100_000 * PRICE_SCALE,
+            QUANTITY_SCALE,
+            1,
+        ),
         1,
     );
-    engine.process(dep_req(taker.clone(), usdc.clone(), 1_000_000 * PRICE_SCALE, 1), 0);
-    let req = post_req(taker, mid, OrderSide::Bid, OrderType::ImmediateOrCancel, 110_000 * PRICE_SCALE, QUANTITY_SCALE, 1);
+    engine.process(
+        dep_req(taker.clone(), usdc.clone(), 1_000_000 * PRICE_SCALE, 1),
+        0,
+    );
+    let req = post_req(
+        taker,
+        mid,
+        OrderSide::Bid,
+        OrderType::ImmediateOrCancel,
+        110_000 * PRICE_SCALE,
+        QUANTITY_SCALE,
+        1,
+    );
     (engine, req)
 }
 
@@ -274,13 +385,35 @@ fn setup_fok_rollback() -> (MatchingEngine, Request) {
 
     let maker = uid(1);
     let taker = uid(2);
-    engine.process(dep_req(maker.clone(), btc.clone(), 1_000_000 * QUANTITY_SCALE, 0), 0);
     engine.process(
-        post_req(maker, mid.clone(), OrderSide::Ask, OrderType::GoodTillCanceled, 200_000 * PRICE_SCALE, 10 * QUANTITY_SCALE, 1),
+        dep_req(maker.clone(), btc.clone(), 1_000_000 * QUANTITY_SCALE, 0),
+        0,
+    );
+    engine.process(
+        post_req(
+            maker,
+            mid.clone(),
+            OrderSide::Ask,
+            OrderType::GoodTillCanceled,
+            200_000 * PRICE_SCALE,
+            10 * QUANTITY_SCALE,
+            1,
+        ),
         1,
     );
-    engine.process(dep_req(taker.clone(), usdc.clone(), 1_000_000 * PRICE_SCALE, 1), 0);
-    let req = post_req(taker, mid, OrderSide::Bid, OrderType::FillOrKill, 50_000 * PRICE_SCALE, QUANTITY_SCALE, 1);
+    engine.process(
+        dep_req(taker.clone(), usdc.clone(), 1_000_000 * PRICE_SCALE, 1),
+        0,
+    );
+    let req = post_req(
+        taker,
+        mid,
+        OrderSide::Bid,
+        OrderType::FillOrKill,
+        50_000 * PRICE_SCALE,
+        QUANTITY_SCALE,
+        1,
+    );
     (engine, req)
 }
 
@@ -291,9 +424,14 @@ fn setup_hft_nonce() -> (MatchingEngine, Vec<Request>) {
     engine.add_market(make_market("BTC"));
 
     let u = uid(1);
-    engine.process(dep_req(u.clone(), usdc.clone(), 1_000_000 * PRICE_SCALE, 0), 0);
+    engine.process(
+        dep_req(u.clone(), usdc.clone(), 1_000_000 * PRICE_SCALE, 0),
+        0,
+    );
 
-    let nonces: [u64; 20] = [20, 1, 15, 3, 8, 11, 2, 18, 5, 14, 7, 17, 4, 12, 9, 19, 6, 16, 10, 13];
+    let nonces: [u64; 20] = [
+        20, 1, 15, 3, 8, 11, 2, 18, 5, 14, 7, 17, 4, 12, 9, 19, 6, 16, 10, 13,
+    ];
     let requests: Vec<Request> = nonces
         .iter()
         .enumerate()
@@ -321,16 +459,35 @@ fn setup_credit_auto_cancel() -> (MatchingEngine, Request) {
 
     let mm = uid(1);
     engine.set_credit_ratio(mm.clone(), 1.0);
-    engine.process(dep_req(mm.clone(), usdc.clone(), 1_000_000 * PRICE_SCALE, 0), 0);
+    engine.process(
+        dep_req(mm.clone(), usdc.clone(), 1_000_000 * PRICE_SCALE, 0),
+        0,
+    );
 
     for i in 1u64..=19 {
         engine.process(
-            post_req(mm.clone(), mid.clone(), OrderSide::Bid, OrderType::GoodTillCanceled, 50_000 * PRICE_SCALE, QUANTITY_SCALE, i),
+            post_req(
+                mm.clone(),
+                mid.clone(),
+                OrderSide::Bid,
+                OrderType::GoodTillCanceled,
+                50_000 * PRICE_SCALE,
+                QUANTITY_SCALE,
+                i,
+            ),
             i,
         );
     }
 
-    let req = post_req(mm, mid, OrderSide::Bid, OrderType::GoodTillCanceled, 60_000 * PRICE_SCALE, QUANTITY_SCALE, 20);
+    let req = post_req(
+        mm,
+        mid,
+        OrderSide::Bid,
+        OrderType::GoodTillCanceled,
+        60_000 * PRICE_SCALE,
+        QUANTITY_SCALE,
+        20,
+    );
     (engine, req)
 }
 
@@ -343,13 +500,35 @@ fn setup_fill_with_fees(maker_bps: i64, taker_bps: i64) -> (MatchingEngine, Requ
 
     let maker = uid(1);
     let taker = uid(2);
-    engine.process(dep_req(maker.clone(), btc.clone(), 1_000_000 * QUANTITY_SCALE, 0), 0);
     engine.process(
-        post_req(maker, mid.clone(), OrderSide::Ask, OrderType::GoodTillCanceled, 100_000 * PRICE_SCALE, QUANTITY_SCALE, 1),
+        dep_req(maker.clone(), btc.clone(), 1_000_000 * QUANTITY_SCALE, 0),
+        0,
+    );
+    engine.process(
+        post_req(
+            maker,
+            mid.clone(),
+            OrderSide::Ask,
+            OrderType::GoodTillCanceled,
+            100_000 * PRICE_SCALE,
+            QUANTITY_SCALE,
+            1,
+        ),
         1,
     );
-    engine.process(dep_req(taker.clone(), usdc.clone(), 1_000_000 * PRICE_SCALE, 1), 0);
-    let req = post_req(taker, mid, OrderSide::Bid, OrderType::ImmediateOrCancel, 110_000 * PRICE_SCALE, QUANTITY_SCALE, 1);
+    engine.process(
+        dep_req(taker.clone(), usdc.clone(), 1_000_000 * PRICE_SCALE, 1),
+        0,
+    );
+    let req = post_req(
+        taker,
+        mid,
+        OrderSide::Bid,
+        OrderType::ImmediateOrCancel,
+        110_000 * PRICE_SCALE,
+        QUANTITY_SCALE,
+        1,
+    );
     (engine, req)
 }
 

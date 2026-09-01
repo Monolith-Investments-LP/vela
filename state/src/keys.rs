@@ -40,14 +40,18 @@ impl StateKey {
 
     pub fn decode(raw: &[u8]) -> Option<Self> {
         if let Some(rest) = raw.strip_prefix(b"bal:") {
-            if rest.len() < 21 { return None; }
+            if rest.len() < 21 {
+                return None;
+            }
             let user = UserId(rest[..20].try_into().ok()?);
             let s = std::str::from_utf8(&rest[21..]).ok()?;
             let asset = AssetId::from_str(s);
             return Some(StateKey::Balance { user, asset });
         }
         if let Some(rest) = raw.strip_prefix(b"meta:") {
-            if rest.len() != 20 { return None; }
+            if rest.len() != 20 {
+                return None;
+            }
             let user = UserId(rest.try_into().ok()?);
             return Some(StateKey::Metadata { user });
         }

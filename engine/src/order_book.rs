@@ -1,5 +1,5 @@
-use std::collections::{BTreeMap, VecDeque};
 use crate::EngineMap;
+use std::collections::{BTreeMap, VecDeque};
 use types::{Order, OrderId, OrderSide, Price, Quantity, VelaError};
 
 #[derive(Debug, Clone)]
@@ -10,7 +10,10 @@ pub struct PriceLevel {
 
 impl PriceLevel {
     pub fn new(price: Price) -> Self {
-        PriceLevel { price, orders: VecDeque::new() }
+        PriceLevel {
+            price,
+            orders: VecDeque::new(),
+        }
     }
 
     pub fn total_quantity(&self) -> Quantity {
@@ -106,7 +109,8 @@ impl OrderBook {
         let pos = level.orders.iter().position(|o| o.id == order_id)?;
         let order = level.orders.remove(pos)?;
         if let Some(coid) = &order.client_order_id {
-            self.client_order_id_index.remove(&(order.user.clone(), coid.clone()));
+            self.client_order_id_index
+                .remove(&(order.user.clone(), coid.clone()));
         }
         if level.is_empty() {
             levels.remove(&price);
@@ -116,7 +120,9 @@ impl OrderBook {
     }
 
     pub fn find_by_client_order_id(&self, user: &types::UserId, coid: &str) -> Option<OrderId> {
-        self.client_order_id_index.get(&(user.clone(), coid.to_string())).copied()
+        self.client_order_id_index
+            .get(&(user.clone(), coid.to_string()))
+            .copied()
     }
 
     pub fn get_order(&self, order_id: OrderId) -> Option<&Order> {
@@ -183,14 +189,20 @@ impl OrderBook {
 
     /// Zero-allocation variant: yields references into existing price levels.
     /// Used by the hot-path `match_order` to avoid cloning every resting Order.
-    pub fn matchable_asks_ref(&self, bid_price: Price) -> impl Iterator<Item = (Price, &VecDeque<Order>)> {
+    pub fn matchable_asks_ref(
+        &self,
+        bid_price: Price,
+    ) -> impl Iterator<Item = (Price, &VecDeque<Order>)> {
         self.asks
             .iter()
             .take_while(move |(p, _)| **p <= bid_price)
             .map(|(p, l)| (*p, &l.orders))
     }
 
-    pub fn matchable_bids_ref(&self, ask_price: Price) -> impl Iterator<Item = (Price, &VecDeque<Order>)> {
+    pub fn matchable_bids_ref(
+        &self,
+        ask_price: Price,
+    ) -> impl Iterator<Item = (Price, &VecDeque<Order>)> {
         self.bids
             .iter()
             .rev()
@@ -218,11 +230,19 @@ impl OrderBook {
     /// Zero-allocation best-level quantity queries — used instead of depth_asks/bids(1)
     /// to avoid a Vec allocation on every match_order call.
     pub fn top_ask_quantity(&self) -> Quantity {
-        self.asks.values().next().map(|l| l.total_quantity()).unwrap_or(0)
+        self.asks
+            .values()
+            .next()
+            .map(|l| l.total_quantity())
+            .unwrap_or(0)
     }
 
     pub fn top_bid_quantity(&self) -> Quantity {
-        self.bids.values().next_back().map(|l| l.total_quantity()).unwrap_or(0)
+        self.bids
+            .values()
+            .next_back()
+            .map(|l| l.total_quantity())
+            .unwrap_or(0)
     }
 
     pub fn all_orders(&self) -> Vec<Order> {

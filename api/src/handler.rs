@@ -1,34 +1,43 @@
-use std::sync::Arc;
-use engine;
+use crate::{
+    auth::{
+        cancel_signing_message, eth_message_hash, order_signing_message, verify_matches_async,
+        withdrawal_signing_message,
+    },
+    types::{
+        format_amount, ApiResponse, BalanceResponse, BatchDetail, BatchSummary, BookLevel,
+        BookResponse, CancelOrderBody, DepositBody, MarketResponse, OrderFillRecord, PostOrderBody,
+        StateRootData, StoredFill, StoredOrder, WithdrawBody, WsEnvelope,
+    },
+    wal,
+    wal::{
+        WalDeposit, WalFillCreated, WalOrderCancel, WalOrderPost, WalOrderProcessed,
+        WalWithdrawalRequest,
+    },
+    ws::handle_ws,
+    AppState,
+};
 use axum::{
-    extract::{Path, Query, State, WebSocketUpgrade, ws::{Message, WebSocket}},
+    extract::{
+        ws::{Message, WebSocket},
+        Path, Query, State, WebSocketUpgrade,
+    },
     http::{HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
 };
+use engine;
 use futures_util::{SinkExt, StreamExt};
 use k256::ecdsa::SigningKey;
 use sha3::{Digest, Keccak256};
-use tower_http::cors::{AllowOrigin, CorsLayer};
-use types::{
-    AssetId, CancelOrderRequest, DepositRequest, Fill, MarketId, NonceWindow, OrderSide, OrderStatus,
-    OrderType, PostOrderRequest, Request as EngineRequest, Response as EngineResponse, UserId, UserMetadata, WithdrawalRequest,
-    PRICE_DECIMALS, QUANTITY_DECIMALS,
-};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::Ordering;
-use crate::{
-    AppState,
-    auth::{cancel_signing_message, eth_message_hash, order_signing_message, verify_matches_async, withdrawal_signing_message},
-    types::{
-        ApiResponse, BalanceResponse, BatchDetail, BatchSummary, BookLevel, BookResponse,
-        CancelOrderBody, DepositBody, MarketResponse, OrderFillRecord, PostOrderBody,
-        StateRootData, StoredFill, StoredOrder, WithdrawBody, WsEnvelope, format_amount,
-    },
-    wal,
-    wal::{WalDeposit, WalFillCreated, WalOrderCancel, WalOrderPost, WalOrderProcessed, WalWithdrawalRequest},
-    ws::handle_ws,
+use std::sync::Arc;
+use tower_http::cors::{AllowOrigin, CorsLayer};
+use types::{
+    AssetId, CancelOrderRequest, DepositRequest, Fill, MarketId, NonceWindow, OrderSide,
+    OrderStatus, OrderType, PostOrderRequest, Request as EngineRequest, Response as EngineResponse,
+    UserId, UserMetadata, WithdrawalRequest, PRICE_DECIMALS, QUANTITY_DECIMALS,
 };
 
 #[derive(serde::Deserialize)]
@@ -61,7 +70,9 @@ fn parse_eth_amount_wei(s: &str) -> Option<u128> {
     }
     frac_str.truncate(18);
     let frac_val: u128 = frac_str.parse().ok()?;
-    integer_val.checked_mul(1_000_000_000_000_000_000u128)?.checked_add(frac_val)
+    integer_val
+        .checked_mul(1_000_000_000_000_000_000u128)?
+        .checked_add(frac_val)
 }
 
 fn asset_address_for(asset: &str) -> Option<[u8; 20]> {
@@ -81,7 +92,10 @@ fn sign_withdrawal_op(
     chain_id: u64,
     settlement_addr: [u8; 20],
 ) -> Result<String, String> {
-    let key_hex = operator_key_hex.strip_prefix("0x").unwrap_or(&operator_key_hex).to_string();
+    let key_hex = operator_key_hex
+        .strip_prefix("0x")
+        .unwrap_or(&operator_key_hex)
+        .to_string();
     let key_bytes = hex::decode(&key_hex).map_err(|_| "invalid operator key".to_string())?;
     let signing_key = SigningKey::from_slice(&key_bytes).map_err(|e| e.to_string())?;
 
@@ -154,8 +168,9 @@ fn settlement_context() -> Result<(u64, [u8; 20]), String> {
         .unwrap_or_else(|_| "11155111".to_string())
         .parse()
         .map_err(|_| "VELA_CHAIN_ID must be a u64".to_string())?;
-    let addr_str = std::env::var("VELA_SETTLEMENT_ADDRESS")
-        .map_err(|_| "VELA_SETTLEMENT_ADDRESS env var must be set to the deployed contract address".to_string())?;
+    let addr_str = std::env::var("VELA_SETTLEMENT_ADDRESS").map_err(|_| {
+        "VELA_SETTLEMENT_ADDRESS env var must be set to the deployed contract address".to_string()
+    })?;
     let addr = parse_hex_address(&addr_str)?;
     Ok((chain_id, addr))
 }
@@ -163,8 +178,12 @@ fn settlement_context() -> Result<(u64, [u8; 20]), String> {
 pub fn build_router(state: Arc<AppState>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list([
-            "https://vela.monolithsystematic.com".parse::<HeaderValue>().unwrap(),
-            "https://vela-vert.vercel.app".parse::<HeaderValue>().unwrap(),
+            "https://vela.monolithsystematic.com"
+                .parse::<HeaderValue>()
+                .unwrap(),
+            "https://vela-vert.vercel.app"
+                .parse::<HeaderValue>()
+                .unwrap(),
             "http://localhost:3000".parse::<HeaderValue>().unwrap(),
         ]))
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
@@ -179,7 +198,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/markets/:market/book", get(get_book))
         .route("/account/:address/balances", get(get_balances))
         .route("/account/:address/orders", get(get_open_orders))
-        .route("/account/:address/orders/by-client-id/:client_id", get(get_order_by_client_id))
+        .route(
+            "/account/:address/orders/by-client-id/:client_id",
+            get(get_order_by_client_id),
+        )
         .route("/orders", post(post_order))
         .route("/orders/cancel", post(cancel_order))
         .route("/orders/:order_id", get(get_order_by_id))
@@ -215,14 +237,23 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/analytics", get(analytics_handler))
         .route("/analytics/:market_id", get(analytics_market_handler))
         .route("/batches/:batch_id/proof", get(batch_proof_handler))
-        .route("/batches/:batch_id/attestation", get(batch_attestation_handler))
+        .route(
+            "/batches/:batch_id/attestation",
+            get(batch_attestation_handler),
+        )
         .route("/proofs/stats", get(proof_stats_handler))
         .route("/proofs", get(proofs_list_handler))
         .route("/tee/stats", get(tee_stats_handler))
         .route("/attestations", get(attestations_list_handler))
         .route("/wal/stats", get(wal_stats_handler))
-        .route("/order/encrypted", post(crate::committee_handler::post_encrypted_order))
-        .route("/committee/share", post(crate::committee_handler::post_committee_share))
+        .route(
+            "/order/encrypted",
+            post(crate::committee_handler::post_encrypted_order),
+        )
+        .route(
+            "/committee/share",
+            post(crate::committee_handler::post_committee_share),
+        )
         .with_state(state)
         .layer(cors)
 }
@@ -250,35 +281,87 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
 
     let mut out = String::with_capacity(1024);
 
-    let _ = writeln!(out, "# HELP vela_orders_today_total Orders accepted since UTC midnight.");
+    let _ = writeln!(
+        out,
+        "# HELP vela_orders_today_total Orders accepted since UTC midnight."
+    );
     let _ = writeln!(out, "# TYPE vela_orders_today_total counter");
-    let _ = writeln!(out, "vela_orders_today_total {}", state.orders_today.load(Ordering::Relaxed));
+    let _ = writeln!(
+        out,
+        "vela_orders_today_total {}",
+        state.orders_today.load(Ordering::Relaxed)
+    );
 
-    let _ = writeln!(out, "# HELP vela_fills_today_total Fills produced since UTC midnight.");
+    let _ = writeln!(
+        out,
+        "# HELP vela_fills_today_total Fills produced since UTC midnight."
+    );
     let _ = writeln!(out, "# TYPE vela_fills_today_total counter");
-    let _ = writeln!(out, "vela_fills_today_total {}", state.fills_today.load(Ordering::Relaxed));
+    let _ = writeln!(
+        out,
+        "vela_fills_today_total {}",
+        state.fills_today.load(Ordering::Relaxed)
+    );
 
-    let _ = writeln!(out, "# HELP vela_volume_today_usdc_micro Volume since UTC midnight (USDC, ×1e6).");
+    let _ = writeln!(
+        out,
+        "# HELP vela_volume_today_usdc_micro Volume since UTC midnight (USDC, ×1e6)."
+    );
     let _ = writeln!(out, "# TYPE vela_volume_today_usdc_micro counter");
-    let _ = writeln!(out, "vela_volume_today_usdc_micro {}", state.volume_today_usdc.load(Ordering::Relaxed));
+    let _ = writeln!(
+        out,
+        "vela_volume_today_usdc_micro {}",
+        state.volume_today_usdc.load(Ordering::Relaxed)
+    );
 
-    let _ = writeln!(out, "# HELP vela_ws_clients Current WebSocket client count.");
+    let _ = writeln!(
+        out,
+        "# HELP vela_ws_clients Current WebSocket client count."
+    );
     let _ = writeln!(out, "# TYPE vela_ws_clients gauge");
-    let _ = writeln!(out, "vela_ws_clients {}", state.ws_client_count.load(Ordering::Relaxed));
+    let _ = writeln!(
+        out,
+        "vela_ws_clients {}",
+        state.ws_client_count.load(Ordering::Relaxed)
+    );
 
-    let _ = writeln!(out, "# HELP vela_last_snapshot_timestamp_ms Wall-clock ms since UNIX epoch of last snapshot.");
+    let _ = writeln!(
+        out,
+        "# HELP vela_last_snapshot_timestamp_ms Wall-clock ms since UNIX epoch of last snapshot."
+    );
     let _ = writeln!(out, "# TYPE vela_last_snapshot_timestamp_ms gauge");
-    let _ = writeln!(out, "vela_last_snapshot_timestamp_ms {}", state.last_snapshot_ts.load(Ordering::Relaxed));
+    let _ = writeln!(
+        out,
+        "vela_last_snapshot_timestamp_ms {}",
+        state.last_snapshot_ts.load(Ordering::Relaxed)
+    );
 
-    let _ = writeln!(out, "# HELP vela_batch_dispatch_latency_ns Latency of most recent batch dispatch (ns).");
+    let _ = writeln!(
+        out,
+        "# HELP vela_batch_dispatch_latency_ns Latency of most recent batch dispatch (ns)."
+    );
     let _ = writeln!(out, "# TYPE vela_batch_dispatch_latency_ns gauge");
-    let _ = writeln!(out, "vela_batch_dispatch_latency_ns {}", state.batch_metrics.batch_dispatch_latency_ns());
+    let _ = writeln!(
+        out,
+        "vela_batch_dispatch_latency_ns {}",
+        state.batch_metrics.batch_dispatch_latency_ns()
+    );
 
-    let _ = writeln!(out, "# HELP vela_orders_per_second Rolling-1s orders-per-second estimate.");
+    let _ = writeln!(
+        out,
+        "# HELP vela_orders_per_second Rolling-1s orders-per-second estimate."
+    );
     let _ = writeln!(out, "# TYPE vela_orders_per_second gauge");
-    let _ = writeln!(out, "vela_orders_per_second {}", state.batch_metrics.orders_per_second());
+    let _ = writeln!(
+        out,
+        "vela_orders_per_second {}",
+        state.batch_metrics.orders_per_second()
+    );
 
-    let _ = writeln!(out, "# HELP vela_batch_count_total Batches dispatched (since last histogram drain).");
+    let _ = writeln!(
+        out,
+        "# HELP vela_batch_count_total Batches dispatched (since last histogram drain)."
+    );
     let _ = writeln!(out, "# TYPE vela_batch_count_total counter");
     let _ = writeln!(out, "vela_batch_count_total {}", batch_count);
 
@@ -288,28 +371,43 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
 
     let _ = writeln!(out, "# HELP vela_order_channel_send_failures_total Order-channel sends that failed (dispatcher gone).");
     let _ = writeln!(out, "# TYPE vela_order_channel_send_failures_total counter");
-    let _ = writeln!(out, "vela_order_channel_send_failures_total {}", crate::ORDER_CHANNEL_SEND_FAILURES.load(Ordering::Relaxed));
+    let _ = writeln!(
+        out,
+        "vela_order_channel_send_failures_total {}",
+        crate::ORDER_CHANNEL_SEND_FAILURES.load(Ordering::Relaxed)
+    );
 
-    let _ = writeln!(out, "# HELP vela_feed_no_subscriber_drops_total Broadcast publishes with zero live receivers.");
+    let _ = writeln!(
+        out,
+        "# HELP vela_feed_no_subscriber_drops_total Broadcast publishes with zero live receivers."
+    );
     let _ = writeln!(out, "# TYPE vela_feed_no_subscriber_drops_total counter");
-    let _ = writeln!(out, "vela_feed_no_subscriber_drops_total {}", crate::feeds::FEED_NO_SUBSCRIBER_DROPS.load(Ordering::Relaxed));
+    let _ = writeln!(
+        out,
+        "vela_feed_no_subscriber_drops_total {}",
+        crate::feeds::FEED_NO_SUBSCRIBER_DROPS.load(Ordering::Relaxed)
+    );
 
     (
-        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
         out,
     )
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> Response {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> Response {
     ws.on_upgrade(move |socket| handle_ws(socket, state))
 }
 
 async fn list_markets(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let engine = state.engine.lock().await;
-    let market_ids: Vec<_> = engine.markets.values().map(|m| (m.id.clone(), m.base, m.quote)).collect();
+    let market_ids: Vec<_> = engine
+        .markets
+        .values()
+        .map(|m| (m.id.clone(), m.base, m.quote))
+        .collect();
     drop(engine);
     let mut markets: Vec<MarketResponse> = Vec::with_capacity(market_ids.len());
     for (market_id, base, quote) in market_ids {
@@ -318,9 +416,12 @@ async fn list_markets(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 let shard = shard_arc.lock().await;
                 let book = shard.engine.order_books.get(&market_id);
                 (
-                    book.and_then(|b| b.best_bid()).map(|p| format_amount(p, PRICE_DECIMALS)),
-                    book.and_then(|b| b.best_ask()).map(|p| format_amount(p, PRICE_DECIMALS)),
-                    book.and_then(|b| b.spread()).map(|s| format_amount(s, PRICE_DECIMALS)),
+                    book.and_then(|b| b.best_bid())
+                        .map(|p| format_amount(p, PRICE_DECIMALS)),
+                    book.and_then(|b| b.best_ask())
+                        .map(|p| format_amount(p, PRICE_DECIMALS)),
+                    book.and_then(|b| b.spread())
+                        .map(|s| format_amount(s, PRICE_DECIMALS)),
                 )
             } else {
                 (None, None, None)
@@ -347,20 +448,40 @@ async fn get_book(
             let shard = shard_arc.lock().await;
             match shard.engine.order_books.get(&market_id) {
                 Some(book) => {
-                    let bids = book.depth_bids(50).iter().map(|(p, q)| BookLevel {
-                        price: format_amount(*p, PRICE_DECIMALS),
-                        quantity: format_amount(*q, QUANTITY_DECIMALS),
-                    }).collect();
-                    let asks = book.depth_asks(50).iter().map(|(p, q)| BookLevel {
-                        price: format_amount(*p, PRICE_DECIMALS),
-                        quantity: format_amount(*q, QUANTITY_DECIMALS),
-                    }).collect();
-                    (StatusCode::OK, Json(ApiResponse::ok(BookResponse { market, bids, asks }))).into_response()
+                    let bids = book
+                        .depth_bids(50)
+                        .iter()
+                        .map(|(p, q)| BookLevel {
+                            price: format_amount(*p, PRICE_DECIMALS),
+                            quantity: format_amount(*q, QUANTITY_DECIMALS),
+                        })
+                        .collect();
+                    let asks = book
+                        .depth_asks(50)
+                        .iter()
+                        .map(|(p, q)| BookLevel {
+                            price: format_amount(*p, PRICE_DECIMALS),
+                            quantity: format_amount(*q, QUANTITY_DECIMALS),
+                        })
+                        .collect();
+                    (
+                        StatusCode::OK,
+                        Json(ApiResponse::ok(BookResponse { market, bids, asks })),
+                    )
+                        .into_response()
                 }
-                None => (StatusCode::NOT_FOUND, Json(ApiResponse::<()>::err("market not found"))).into_response(),
+                None => (
+                    StatusCode::NOT_FOUND,
+                    Json(ApiResponse::<()>::err("market not found")),
+                )
+                    .into_response(),
             }
         }
-        None => (StatusCode::NOT_FOUND, Json(ApiResponse::<()>::err("market not found"))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()>::err("market not found")),
+        )
+            .into_response(),
     }
 }
 
@@ -370,10 +491,18 @@ async fn get_balances(
 ) -> impl IntoResponse {
     let user = match UserId::from_hex(&address) {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid address"))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid address")),
+            )
+                .into_response()
+        }
     };
     let us = state.shards.user_state.read().await;
-    let balances: Vec<BalanceResponse> = us.balances.iter()
+    let balances: Vec<BalanceResponse> = us
+        .balances
+        .iter()
         .filter(|((u, _), _)| u == &user)
         .map(|((_, asset), bal)| BalanceResponse {
             asset: asset.as_str().to_string(),
@@ -391,11 +520,20 @@ async fn get_open_orders(
 ) -> impl IntoResponse {
     let user = match UserId::from_hex(&address) {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid address"))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid address")),
+            )
+                .into_response()
+        }
     };
     let open_order_ids = {
         let us = state.shards.user_state.read().await;
-        us.metadata.get(&user).map(|m| m.iter_order_ids().collect::<Vec<_>>()).unwrap_or_default()
+        us.metadata
+            .get(&user)
+            .map(|m| m.iter_order_ids().collect::<Vec<_>>())
+            .unwrap_or_default()
     };
     let mut orders: Vec<serde_json::Value> = Vec::new();
     for shard_arc in state.shards.shards.values() {
@@ -429,7 +567,13 @@ async fn get_order_by_client_id(
 ) -> impl IntoResponse {
     let user = match UserId::from_hex(&address) {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid address"))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid address")),
+            )
+                .into_response()
+        }
     };
 
     let mut found_order = None;
@@ -437,26 +581,32 @@ async fn get_order_by_client_id(
         let shard = shard_arc.lock().await;
         for book in shard.engine.order_books.values() {
             if let Some(oid) = book.find_by_client_order_id(&user, &client_id) {
-                found_order = book.get_order(oid).map(|o| serde_json::json!({
-                    "id": o.id,
-                    "market": o.market.0,
-                    "side": format!("{:?}", o.side).to_lowercase(),
-                    "order_type": format!("{:?}", o.order_type).to_lowercase(),
-                    "price": format_amount(o.price, PRICE_DECIMALS),
-                    "quantity": format_amount(o.quantity, QUANTITY_DECIMALS),
-                    "filled_quantity": format_amount(o.filled_quantity, QUANTITY_DECIMALS),
-                    "status": format!("{:?}", o.status).to_lowercase(),
-                    "nonce": o.nonce,
-                    "client_order_id": o.client_order_id,
-                    "timestamp": o.timestamp,
-                }));
+                found_order = book.get_order(oid).map(|o| {
+                    serde_json::json!({
+                        "id": o.id,
+                        "market": o.market.0,
+                        "side": format!("{:?}", o.side).to_lowercase(),
+                        "order_type": format!("{:?}", o.order_type).to_lowercase(),
+                        "price": format_amount(o.price, PRICE_DECIMALS),
+                        "quantity": format_amount(o.quantity, QUANTITY_DECIMALS),
+                        "filled_quantity": format_amount(o.filled_quantity, QUANTITY_DECIMALS),
+                        "status": format!("{:?}", o.status).to_lowercase(),
+                        "nonce": o.nonce,
+                        "client_order_id": o.client_order_id,
+                        "timestamp": o.timestamp,
+                    })
+                });
                 break 'outer;
             }
         }
     }
     match found_order {
         Some(o) => (StatusCode::OK, Json(ApiResponse::ok(o))).into_response(),
-        None => (StatusCode::NOT_FOUND, Json(ApiResponse::<()>::err("order not found"))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()>::err("order not found")),
+        )
+            .into_response(),
     }
 }
 
@@ -465,35 +615,85 @@ async fn post_order(
     Json(body): Json<PostOrderBody>,
 ) -> impl IntoResponse {
     if !state.order_limiter.check(&body.address) {
-        return (StatusCode::TOO_MANY_REQUESTS, Json(ApiResponse::<()>::err("Rate limit exceeded. Please slow down."))).into_response();
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiResponse::<()>::err(
+                "Rate limit exceeded. Please slow down.",
+            )),
+        )
+            .into_response();
     }
 
     if !body.address.starts_with("0x") || body.address.len() != 42 {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("Invalid wallet address format"))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("Invalid wallet address format")),
+        )
+            .into_response();
     }
 
     let user = match UserId::from_hex(&body.address) {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("Invalid wallet address format"))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("Invalid wallet address format")),
+            )
+                .into_response()
+        }
     };
 
     if body.price == 0 {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("Price must be greater than 0"))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("Price must be greater than 0")),
+        )
+            .into_response();
     }
     if body.quantity == 0 {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("Quantity must be greater than 0"))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("Quantity must be greater than 0")),
+        )
+            .into_response();
     }
     if body.price >= u64::MAX / 2 {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("Price exceeds maximum allowed value"))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err(
+                "Price exceeds maximum allowed value",
+            )),
+        )
+            .into_response();
     }
     if body.quantity >= u64::MAX / 2 {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("Quantity exceeds maximum allowed value"))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err(
+                "Quantity exceeds maximum allowed value",
+            )),
+        )
+            .into_response();
     }
 
     let side_str = format!("{:?}", body.side).to_lowercase();
-    let msg = order_signing_message(&body.market, &side_str, body.price, body.quantity, body.nonce, body.client_order_id.as_deref());
-    if verify_matches_async(msg, body.signature.clone(), body.address.clone()).await.is_err() {
-        return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("invalid signature"))).into_response();
+    let msg = order_signing_message(
+        &body.market,
+        &side_str,
+        body.price,
+        body.quantity,
+        body.nonce,
+        body.client_order_id.as_deref(),
+    );
+    if verify_matches_async(msg, body.signature.clone(), body.address.clone())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("invalid signature")),
+        )
+            .into_response();
     }
 
     let req = PostOrderRequest {
@@ -516,7 +716,11 @@ async fn post_order(
     {
         let engine = state.engine.lock().await;
         if !engine.markets.contains_key(&req.market) {
-            return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("Market not found."))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("Market not found.")),
+            )
+                .into_response();
         }
     }
 
@@ -529,15 +733,35 @@ async fn post_order(
     };
     if state.order_tx.send(channel_item).await.is_err() {
         crate::ORDER_CHANNEL_SEND_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::err("engine unavailable")),
+        )
+            .into_response();
     }
     let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
         Ok(Ok(r)) => r,
-        Ok(Err(_)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
-        Err(_) => return (StatusCode::GATEWAY_TIMEOUT, Json(ApiResponse::<()>::err("engine dispatch timed out"))).into_response(),
+        Ok(Err(_)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::err("engine error")),
+            )
+                .into_response()
+        }
+        Err(_) => {
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ApiResponse::<()>::err("engine dispatch timed out")),
+            )
+                .into_response()
+        }
     };
 
-    state.feeds.lock().await.dispatch_response_batch(&user, &responses);
+    state
+        .feeds
+        .lock()
+        .await
+        .dispatch_response_batch(&user, &responses);
 
     if let Some(msg) = first_engine_error(&responses) {
         return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err(msg))).into_response();
@@ -556,7 +780,13 @@ async fn record_order_and_fills(
 ) {
     let fill_pairs: Vec<(String, Fill)> = responses
         .iter()
-        .filter_map(|r| if let EngineResponse::OrderFilled(f) = r { Some(f.clone()) } else { None })
+        .filter_map(|r| {
+            if let EngineResponse::OrderFilled(f) = r {
+                Some(f.clone())
+            } else {
+                None
+            }
+        })
         .map(|f| {
             let id = format!("fill_{}_{}", f.maker_order_id, f.taker_order_id);
             (id, f)
@@ -564,7 +794,11 @@ async fn record_order_and_fills(
         .collect();
 
     let posted = responses.iter().find_map(|r| {
-        if let EngineResponse::OrderPosted(p) = r { Some(p.clone()) } else { None }
+        if let EngineResponse::OrderPosted(p) = r {
+            Some(p.clone())
+        } else {
+            None
+        }
     });
 
     let Some(posted) = posted else { return };
@@ -576,11 +810,12 @@ async fn record_order_and_fills(
     let self_fills: Vec<OrderFillRecord> = fill_pairs
         .iter()
         .map(|(fill_id, f)| {
-            let (counterparty_order_id, counterparty_address) = if f.taker_order_id == posted.order_id {
-                (f.maker_order_id, f.maker.to_hex())
-            } else {
-                (f.taker_order_id, f.taker.to_hex())
-            };
+            let (counterparty_order_id, counterparty_address) =
+                if f.taker_order_id == posted.order_id {
+                    (f.maker_order_id, f.maker.to_hex())
+                } else {
+                    (f.taker_order_id, f.taker.to_hex())
+                };
             OrderFillRecord {
                 fill_id: fill_id.clone(),
                 counterparty_order_id,
@@ -629,9 +864,15 @@ async fn record_order_and_fills(
                 synthetic: false,
             });
             // Cap at 100k fills per market, evicting oldest first.
-            let market_count = fills_guard.iter().filter(|fill| fill.market_id == body.market).count();
+            let market_count = fills_guard
+                .iter()
+                .filter(|fill| fill.market_id == body.market)
+                .count();
             if market_count > 100_000 {
-                if let Some(idx) = fills_guard.iter().position(|fill| fill.market_id == body.market) {
+                if let Some(idx) = fills_guard
+                    .iter()
+                    .position(|fill| fill.market_id == body.market)
+                {
                     fills_guard.remove(idx);
                 }
             }
@@ -639,10 +880,18 @@ async fn record_order_and_fills(
             let taker_fee = notional_micro * 5 / 10000;
             let maker_rebate = notional_micro / 10000;
             state.fills_today.fetch_add(1, Ordering::Relaxed);
-            state.volume_today_usdc.fetch_add(notional_micro, Ordering::Relaxed);
-            state.fees_collected_today.fetch_add(taker_fee, Ordering::Relaxed);
-            state.total_taker_fees_collected.fetch_add(taker_fee, Ordering::Relaxed);
-            state.total_maker_rebates_paid.fetch_add(maker_rebate, Ordering::Relaxed);
+            state
+                .volume_today_usdc
+                .fetch_add(notional_micro, Ordering::Relaxed);
+            state
+                .fees_collected_today
+                .fetch_add(taker_fee, Ordering::Relaxed);
+            state
+                .total_taker_fees_collected
+                .fetch_add(taker_fee, Ordering::Relaxed);
+            state
+                .total_maker_rebates_paid
+                .fetch_add(maker_rebate, Ordering::Relaxed);
         }
 
         // Broadcast updated current candle for each timeframe after all fills are stored.
@@ -651,35 +900,51 @@ async fn record_order_and_fills(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            let last_ts = fill_pairs.iter().map(|(_, f)| f.timestamp).max().unwrap_or(0);
+            let last_ts = fill_pairs
+                .iter()
+                .map(|(_, f)| f.timestamp)
+                .max()
+                .unwrap_or(0);
             let ts_s = last_ts / 1_000_000;
 
             const OHLCV_TIMEFRAMES: &[(&str, u64)] = &[
-                ("1m", 60), ("5m", 300), ("15m", 900),
-                ("1H", 3600), ("4H", 14400), ("1D", 86400),
+                ("1m", 60),
+                ("5m", 300),
+                ("15m", 900),
+                ("1H", 3600),
+                ("4H", 14400),
+                ("1D", 86400),
             ];
             for &(tf_name, interval_secs) in OHLCV_TIMEFRAMES {
                 let bucket = (ts_s / interval_secs) * interval_secs;
                 let bucket_start_us = bucket * 1_000_000;
                 let bucket_end_us = (bucket + interval_secs) * 1_000_000;
 
-                let bucket_fills: Vec<_> = fills_guard.iter()
-                    .filter(|fill| fill.market_id == body.market
-                        && fill.timestamp >= bucket_start_us
-                        && fill.timestamp < bucket_end_us)
+                let bucket_fills: Vec<_> = fills_guard
+                    .iter()
+                    .filter(|fill| {
+                        fill.market_id == body.market
+                            && fill.timestamp >= bucket_start_us
+                            && fill.timestamp < bucket_end_us
+                    })
                     .collect();
 
-                if bucket_fills.is_empty() { continue; }
+                if bucket_fills.is_empty() {
+                    continue;
+                }
 
                 let open = bucket_fills[0].price as f64 / 1_000_000.0;
                 let close = bucket_fills[bucket_fills.len() - 1].price as f64 / 1_000_000.0;
                 let high = bucket_fills.iter().map(|f| f.price).max().unwrap() as f64 / 1_000_000.0;
                 let low = bucket_fills.iter().map(|f| f.price).min().unwrap() as f64 / 1_000_000.0;
-                let volume = bucket_fills.iter().map(|f| f.quantity as f64).sum::<f64>() / 1_000_000.0;
+                let volume =
+                    bucket_fills.iter().map(|f| f.quantity as f64).sum::<f64>() / 1_000_000.0;
 
                 let channel = format!("ohlcv:{}:{}", body.market, tf_name);
                 let seq = {
-                    let entry = state.ws_seqs.entry(channel.clone())
+                    let entry = state
+                        .ws_seqs
+                        .entry(channel.clone())
                         .or_insert_with(|| std::sync::atomic::AtomicU64::new(0));
                     entry.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
                 };
@@ -714,7 +979,8 @@ async fn record_order_and_fills(
         use crate::types::WsEnvelope;
         let channel = format!("trades:{}", body.market);
         let seq = {
-            let entry = state.ws_seqs
+            let entry = state
+                .ws_seqs
                 .entry(channel.clone())
                 .or_insert_with(|| std::sync::atomic::AtomicU64::new(0));
             entry.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
@@ -784,7 +1050,10 @@ async fn record_order_and_fills(
         "filled"
     } else if total_filled > 0 {
         "partial"
-    } else if matches!(posted.status, OrderStatus::Open | OrderStatus::PartiallyFilled) {
+    } else if matches!(
+        posted.status,
+        OrderStatus::Open | OrderStatus::PartiallyFilled
+    ) {
         "resting"
     } else {
         "rejected"
@@ -829,7 +1098,9 @@ async fn record_order_and_fills(
     tokio::spawn(async move {
         let seq = state_da.da.next_seq();
         let da = Arc::clone(&state_da.da);
-        if let Ok(Ok((hash_hex, _url))) = tokio::task::spawn_blocking(move || da.submit_order(seq, &da_bytes)).await {
+        if let Ok(Ok((hash_hex, _url))) =
+            tokio::task::spawn_blocking(move || da.submit_order(seq, &da_bytes)).await
+        {
             if let Some(o) = state_da.stored_orders.lock().await.get_mut(&da_order_id) {
                 o.da_hash = Some(hash_hex);
             }
@@ -880,13 +1151,21 @@ async fn get_da_proof(
     match orders.get(&order_id) {
         Some(order) => {
             let da_hash = order.da_hash.clone();
-            (StatusCode::OK, Json(ApiResponse::ok(serde_json::json!({
-                "order_id": order_id,
-                "da_hash": da_hash,
-                "backend": "local",
-            })))).into_response()
+            (
+                StatusCode::OK,
+                Json(ApiResponse::ok(serde_json::json!({
+                    "order_id": order_id,
+                    "da_hash": da_hash,
+                    "backend": "local",
+                }))),
+            )
+                .into_response()
         }
-        None => (StatusCode::NOT_FOUND, Json(ApiResponse::<()>::err("order not found"))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()>::err("order not found")),
+        )
+            .into_response(),
     }
 }
 
@@ -897,7 +1176,11 @@ async fn get_order_by_id(
     let orders = state.stored_orders.lock().await;
     match orders.get(&order_id) {
         Some(order) => (StatusCode::OK, Json(ApiResponse::ok(order.clone()))).into_response(),
-        None => (StatusCode::NOT_FOUND, Json(ApiResponse::<()>::err("order not found"))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()>::err("order not found")),
+        )
+            .into_response(),
     }
 }
 
@@ -934,14 +1217,21 @@ async fn admin_reserves_handler(
         .unwrap_or("");
 
     if !state.verify_admin_token(provided) {
-        return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("unauthorized"))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("unauthorized")),
+        )
+            .into_response();
     }
 
     let us = state.shards.user_state.read().await;
 
-    let mut engine_balances: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut engine_balances: std::collections::HashMap<String, u64> =
+        std::collections::HashMap::new();
     for ((_, asset), bal) in &us.balances {
-        *engine_balances.entry(asset.as_str().to_string()).or_insert(0) += bal.total();
+        *engine_balances
+            .entry(asset.as_str().to_string())
+            .or_insert(0) += bal.total();
     }
 
     let total_users = us.metadata.len();
@@ -950,11 +1240,15 @@ async fn admin_reserves_handler(
         .unwrap_or_default()
         .as_millis() as u64;
 
-    (StatusCode::OK, Json(ApiResponse::ok(serde_json::json!({
-        "engine_balances": engine_balances,
-        "total_users": total_users,
-        "snapshot_time": snapshot_time,
-    })))).into_response()
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "engine_balances": engine_balances,
+            "total_users": total_users,
+            "snapshot_time": snapshot_time,
+        }))),
+    )
+        .into_response()
 }
 
 async fn cancel_order(
@@ -962,21 +1256,36 @@ async fn cancel_order(
     Json(body): Json<CancelOrderBody>,
 ) -> impl IntoResponse {
     if !state.order_limiter.check(&body.address) {
-        return (StatusCode::TOO_MANY_REQUESTS, Json(ApiResponse::<()>::err("Rate limit exceeded. Please slow down."))).into_response();
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiResponse::<()>::err(
+                "Rate limit exceeded. Please slow down.",
+            )),
+        )
+            .into_response();
     }
 
     let user = match UserId::from_hex(&body.address) {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid address"))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid address")),
+            )
+                .into_response()
+        }
     };
 
-    let msg = cancel_signing_message(
-        body.order_id,
-        body.client_order_id.as_deref(),
-        body.nonce,
-    );
-    if verify_matches_async(msg, body.signature.clone(), body.address.clone()).await.is_err() {
-        return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("invalid signature"))).into_response();
+    let msg = cancel_signing_message(body.order_id, body.client_order_id.as_deref(), body.nonce);
+    if verify_matches_async(msg, body.signature.clone(), body.address.clone())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("invalid signature")),
+        )
+            .into_response();
     }
 
     let cancel_client_order_id = body.client_order_id.clone();
@@ -1004,23 +1313,50 @@ async fn cancel_order(
     };
     if state.order_tx.send(channel_item).await.is_err() {
         crate::ORDER_CHANNEL_SEND_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::err("engine unavailable")),
+        )
+            .into_response();
     }
     let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
         Ok(Ok(r)) => r,
-        Ok(Err(_)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
-        Err(_) => return (StatusCode::GATEWAY_TIMEOUT, Json(ApiResponse::<()>::err("engine dispatch timed out"))).into_response(),
+        Ok(Err(_)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::err("engine error")),
+            )
+                .into_response()
+        }
+        Err(_) => {
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ApiResponse::<()>::err("engine dispatch timed out")),
+            )
+                .into_response()
+        }
     };
 
-    state.feeds.lock().await.dispatch_response_batch(&user, &responses);
+    state
+        .feeds
+        .lock()
+        .await
+        .dispatch_response_batch(&user, &responses);
 
     if let Some(msg) = first_engine_error(&responses) {
         return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err(msg))).into_response();
     }
 
-    let canceled_id = responses.iter().find_map(|r| {
-        if let EngineResponse::OrderCanceled(c) = r { Some(c.order_id) } else { None }
-    }).or(cancel_order_id_hint);
+    let canceled_id = responses
+        .iter()
+        .find_map(|r| {
+            if let EngineResponse::OrderCanceled(c) = r {
+                Some(c.order_id)
+            } else {
+                None
+            }
+        })
+        .or(cancel_order_id_hint);
 
     if let Some(order_id) = canceled_id {
         let wal_cancel = WalOrderCancel {
@@ -1043,12 +1379,25 @@ async fn initiate_withdrawal(
 ) -> impl IntoResponse {
     let user = match UserId::from_hex(&body.address) {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid address"))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid address")),
+            )
+                .into_response()
+        }
     };
 
     let msg = withdrawal_signing_message(&body.asset, body.amount, body.nonce);
-    if verify_matches_async(msg, body.signature.clone(), body.address.clone()).await.is_err() {
-        return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("invalid signature"))).into_response();
+    if verify_matches_async(msg, body.signature.clone(), body.address.clone())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("invalid signature")),
+        )
+            .into_response();
     }
 
     let wal_asset = body.asset.clone();
@@ -1078,15 +1427,35 @@ async fn initiate_withdrawal(
     };
     if state.order_tx.send(channel_item).await.is_err() {
         crate::ORDER_CHANNEL_SEND_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::err("engine unavailable")),
+        )
+            .into_response();
     }
     let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
         Ok(Ok(r)) => r,
-        Ok(Err(_)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
-        Err(_) => return (StatusCode::GATEWAY_TIMEOUT, Json(ApiResponse::<()>::err("engine dispatch timed out"))).into_response(),
+        Ok(Err(_)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::err("engine error")),
+            )
+                .into_response()
+        }
+        Err(_) => {
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ApiResponse::<()>::err("engine dispatch timed out")),
+            )
+                .into_response()
+        }
     };
 
-    state.feeds.lock().await.dispatch_response_batch(&user, &responses);
+    state
+        .feeds
+        .lock()
+        .await
+        .dispatch_response_batch(&user, &responses);
 
     if let Some(msg) = first_engine_error(&responses) {
         return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err(msg))).into_response();
@@ -1110,33 +1479,68 @@ async fn deposit_handler(
     Json(body): Json<DepositBody>,
 ) -> impl IntoResponse {
     if !state.deposit_limiter.check(&body.user) {
-        return (StatusCode::TOO_MANY_REQUESTS, Json(ApiResponse::<()>::err("Rate limit exceeded. Please slow down."))).into_response();
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiResponse::<()>::err(
+                "Rate limit exceeded. Please slow down.",
+            )),
+        )
+            .into_response();
     }
 
     if !body.user.starts_with("0x") || body.user.len() != 42 {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("Invalid wallet address format"))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("Invalid wallet address format")),
+        )
+            .into_response();
     }
 
     let user = match UserId::from_hex(&body.user) {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("Invalid wallet address format"))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("Invalid wallet address format")),
+            )
+                .into_response()
+        }
     };
 
-    if !KNOWN_ASSETS.iter().any(|&a| a.eq_ignore_ascii_case(&body.asset)) {
+    if !KNOWN_ASSETS
+        .iter()
+        .any(|&a| a.eq_ignore_ascii_case(&body.asset))
+    {
         return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("Invalid asset. Supported: ETH, USDC, BTC, SOL, AVAX, MATIC, LINK, UNI, ARB, OP, AAVE, DOGE"))).into_response();
     }
 
     let amount = match parse_decimal_amount(&body.amount) {
         Some(a) => a,
-        None => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid amount"))).into_response(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid amount")),
+            )
+                .into_response()
+        }
     };
 
     if amount == 0 {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("Amount must be greater than 0"))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("Amount must be greater than 0")),
+        )
+            .into_response();
     }
 
     if amount > 1_000_000_000_000u64 {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("Amount exceeds maximum deposit limit of 1,000,000"))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err(
+                "Amount exceeds maximum deposit limit of 1,000,000",
+            )),
+        )
+            .into_response();
     }
 
     let ts = std::time::SystemTime::now()
@@ -1172,15 +1576,35 @@ async fn deposit_handler(
     };
     if state.order_tx.send(channel_item).await.is_err() {
         crate::ORDER_CHANNEL_SEND_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::err("engine unavailable")),
+        )
+            .into_response();
     }
     let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
         Ok(Ok(r)) => r,
-        Ok(Err(_)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
-        Err(_) => return (StatusCode::GATEWAY_TIMEOUT, Json(ApiResponse::<()>::err("engine dispatch timed out"))).into_response(),
+        Ok(Err(_)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::err("engine error")),
+            )
+                .into_response()
+        }
+        Err(_) => {
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ApiResponse::<()>::err("engine dispatch timed out")),
+            )
+                .into_response()
+        }
     };
 
-    state.feeds.lock().await.dispatch_response_batch(&user, &responses);
+    state
+        .feeds
+        .lock()
+        .await
+        .dispatch_response_batch(&user, &responses);
 
     if let Some(msg) = first_engine_error(&responses) {
         return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err(msg))).into_response();
@@ -1197,7 +1621,9 @@ async fn deposit_handler(
     }
 
     let us = state.shards.user_state.read().await;
-    let balances: Vec<BalanceResponse> = us.balances.iter()
+    let balances: Vec<BalanceResponse> = us
+        .balances
+        .iter()
         .filter(|((u, _), _)| u == &user)
         .map(|((_, asset), bal)| BalanceResponse {
             asset: asset.as_str().to_string(),
@@ -1215,27 +1641,57 @@ async fn withdrawal_signature_handler(
     Json(body): Json<WithdrawalSignatureRequest>,
 ) -> impl IntoResponse {
     if !state.deposit_limiter.check(&body.user) {
-        return (StatusCode::TOO_MANY_REQUESTS, Json(ApiResponse::<()>::err("Rate limit exceeded. Please slow down."))).into_response();
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiResponse::<()>::err(
+                "Rate limit exceeded. Please slow down.",
+            )),
+        )
+            .into_response();
     }
 
     let operator_key = match std::env::var("OPERATOR_PRIVATE_KEY") {
         Ok(k) => k,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("Operator key not configured"))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::err("Operator key not configured")),
+            )
+                .into_response()
+        }
     };
 
     let user_id = match UserId::from_hex(&body.user) {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid address"))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid address")),
+            )
+                .into_response()
+        }
     };
 
     let asset_addr = match asset_address_for(&body.asset) {
         Some(a) => a,
-        None => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("unsupported asset"))).into_response(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("unsupported asset")),
+            )
+                .into_response()
+        }
     };
 
     let amount_wei = match parse_eth_amount_wei(&body.amount) {
         Some(a) => a,
-        None => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid amount"))).into_response(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid amount")),
+            )
+                .into_response()
+        }
     };
 
     let user_bytes = user_id.0;
@@ -1246,28 +1702,57 @@ async fn withdrawal_signature_handler(
 
     let (chain_id, settlement_addr) = match settlement_context() {
         Ok(ctx) => ctx,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err(e))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::err(e)),
+            )
+                .into_response()
+        }
     };
 
     let signature = match tokio::task::spawn_blocking(move || {
-        sign_withdrawal_op(operator_key, user_bytes, asset_addr, amount_wei, nonce, chain_id, settlement_addr)
+        sign_withdrawal_op(
+            operator_key,
+            user_bytes,
+            asset_addr,
+            amount_wei,
+            nonce,
+            chain_id,
+            settlement_addr,
+        )
     })
     .await
     {
         Ok(Ok(sig)) => sig,
-        Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err(e))).into_response(),
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("signing failed"))).into_response(),
+        Ok(Err(e)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::err(e)),
+            )
+                .into_response()
+        }
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::err("signing failed")),
+            )
+                .into_response()
+        }
     };
 
-    (StatusCode::OK, Json(ApiResponse::ok(WithdrawalSignatureData {
-        signature,
-        user: user_hex,
-        asset: asset_hex,
-        amount_wei: amount_wei_str,
-        nonce,
-    }))).into_response()
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(WithdrawalSignatureData {
+            signature,
+            user: user_hex,
+            asset: asset_hex,
+            amount_wei: amount_wei_str,
+            nonce,
+        })),
+    )
+        .into_response()
 }
-
 
 // ---------------------------------------------------------------------------
 // VEL-P2-10: Forced-inclusion endpoint
@@ -1335,7 +1820,10 @@ async fn force_include_handler(
     }
 
     // Decode and validate the L1 tx hash — provides replay protection.
-    let hash_str = body.l1_tx_hash.strip_prefix("0x").unwrap_or(&body.l1_tx_hash);
+    let hash_str = body
+        .l1_tx_hash
+        .strip_prefix("0x")
+        .unwrap_or(&body.l1_tx_hash);
     let hash_bytes = match hex::decode(hash_str) {
         Ok(b) if b.len() == 32 => {
             let mut arr = [0u8; 32];
@@ -1345,7 +1833,9 @@ async fn force_include_handler(
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<()>::err("l1_tx_hash must be a 0x-prefixed 32-byte hex string")),
+                Json(ApiResponse::<()>::err(
+                    "l1_tx_hash must be a 0x-prefixed 32-byte hex string",
+                )),
             )
                 .into_response();
         }
@@ -1357,10 +1847,20 @@ async fn force_include_handler(
         .as_micros() as u64;
 
     let (request, req_user) = match body.request {
-        ForceIncludeRequest::Deposit { ref user, ref asset, amount } => {
+        ForceIncludeRequest::Deposit {
+            ref user,
+            ref asset,
+            amount,
+        } => {
             let uid = match UserId::from_hex(user) {
                 Ok(u) => u,
-                Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid user address"))).into_response(),
+                Err(_) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(ApiResponse::<()>::err("invalid user address")),
+                    )
+                        .into_response()
+                }
             };
             let req = EngineRequest::Deposit(DepositRequest {
                 user: uid.clone(),
@@ -1370,10 +1870,21 @@ async fn force_include_handler(
             });
             (req, uid)
         }
-        ForceIncludeRequest::Withdrawal { ref user, ref asset, amount, nonce } => {
+        ForceIncludeRequest::Withdrawal {
+            ref user,
+            ref asset,
+            amount,
+            nonce,
+        } => {
             let uid = match UserId::from_hex(user) {
                 Ok(u) => u,
-                Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid user address"))).into_response(),
+                Err(_) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(ApiResponse::<()>::err("invalid user address")),
+                    )
+                        .into_response()
+                }
             };
             let req = EngineRequest::Withdrawal(WithdrawalRequest {
                 user: uid.clone(),
@@ -1396,12 +1907,28 @@ async fn force_include_handler(
     };
     if state.order_tx.send(channel_item).await.is_err() {
         crate::ORDER_CHANNEL_SEND_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine unavailable"))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::err("engine unavailable")),
+        )
+            .into_response();
     }
     let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
         Ok(Ok(r)) => r,
-        Ok(Err(_)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err("engine error"))).into_response(),
-        Err(_) => return (StatusCode::GATEWAY_TIMEOUT, Json(ApiResponse::<()>::err("engine dispatch timed out"))).into_response(),
+        Ok(Err(_)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::err("engine error")),
+            )
+                .into_response()
+        }
+        Err(_) => {
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ApiResponse::<()>::err("engine dispatch timed out")),
+            )
+                .into_response()
+        }
     };
 
     state
@@ -1414,11 +1941,15 @@ async fn force_include_handler(
         return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err(msg))).into_response();
     }
 
-    (StatusCode::OK, Json(ApiResponse::ok(serde_json::json!({
-        "l1_tx_hash": body.l1_tx_hash,
-        "responses": responses,
-        "note": "forced inclusion processed; committer will include in next batch",
-    })))).into_response()
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "l1_tx_hash": body.l1_tx_hash,
+            "responses": responses,
+            "note": "forced inclusion processed; committer will include in next batch",
+        }))),
+    )
+        .into_response()
 }
 
 async fn admin_state_handler(
@@ -1431,21 +1962,33 @@ async fn admin_state_handler(
         .unwrap_or("");
 
     if !state.verify_admin_token(provided) {
-        return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("unauthorized"))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("unauthorized")),
+        )
+            .into_response();
     }
 
     let (market_ids_bases_quotes, total_users, total_deposits, total_open_orders) = {
         let engine = state.engine.lock().await;
-        let mids: Vec<_> = engine.markets.values().map(|m| (m.id.clone(), m.base, m.quote)).collect();
+        let mids: Vec<_> = engine
+            .markets
+            .values()
+            .map(|m| (m.id.clone(), m.base, m.quote))
+            .collect();
         let us = state.shards.user_state.read().await;
         let tu = us.metadata.len();
-        let td: Vec<serde_json::Value> = us.balances.iter().map(|((user, asset), bal)| {
-            serde_json::json!({
-                "user": format!("0x{}", hex::encode(user.0)),
-                "asset": asset.as_str(),
-                "amount": format_amount(bal.total(), 8),
+        let td: Vec<serde_json::Value> = us
+            .balances
+            .iter()
+            .map(|((user, asset), bal)| {
+                serde_json::json!({
+                    "user": format!("0x{}", hex::encode(user.0)),
+                    "asset": asset.as_str(),
+                    "amount": format_amount(bal.total(), 8),
+                })
             })
-        }).collect();
+            .collect();
         let too: usize = us.metadata.values().map(|m| m.order_id_count()).sum();
         (mids, tu, td, too)
     };
@@ -1456,8 +1999,10 @@ async fn admin_state_handler(
             let shard = shard_arc.lock().await;
             let book = shard.engine.order_books.get(&market_id);
             (
-                book.and_then(|b| b.best_bid()).map(|p| format_amount(p, PRICE_DECIMALS)),
-                book.and_then(|b| b.best_ask()).map(|p| format_amount(p, PRICE_DECIMALS)),
+                book.and_then(|b| b.best_bid())
+                    .map(|p| format_amount(p, PRICE_DECIMALS)),
+                book.and_then(|b| b.best_ask())
+                    .map(|p| format_amount(p, PRICE_DECIMALS)),
             )
         } else {
             (None, None)
@@ -1479,14 +2024,18 @@ async fn admin_state_handler(
 
     let uptime_secs = state.start_time.elapsed().as_secs();
 
-    (StatusCode::OK, Json(ApiResponse::ok(serde_json::json!({
-        "markets": markets,
-        "total_users": total_users,
-        "total_deposits": total_deposits,
-        "total_open_orders": total_open_orders,
-        "snapshot_exists": snapshot_exists,
-        "uptime_secs": uptime_secs,
-    })))).into_response()
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "markets": markets,
+            "total_users": total_users,
+            "total_deposits": total_deposits,
+            "total_open_orders": total_open_orders,
+            "snapshot_exists": snapshot_exists,
+            "uptime_secs": uptime_secs,
+        }))),
+    )
+        .into_response()
 }
 
 fn batch_state_root(fill_ids: &[String]) -> String {
@@ -1584,36 +2133,43 @@ async fn list_batches(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let fills = state.fills.lock().await;
     let mut windows: BTreeMap<u64, Vec<StoredFill>> = BTreeMap::new();
     for fill in fills.iter() {
-        windows.entry(fill.timestamp / WINDOW_US).or_default().push(fill.clone());
+        windows
+            .entry(fill.timestamp / WINDOW_US)
+            .or_default()
+            .push(fill.clone());
     }
     drop(fills);
 
     let window_vec: Vec<(u64, Vec<StoredFill>)> = windows.into_iter().collect();
     let mut prev_root = format!("0x{}", "0".repeat(64));
 
-    let batches: Vec<BatchSummary> = window_vec.iter().enumerate().map(|(idx, (window_key, batch_fills))| {
-        let fill_ids: Vec<String> = batch_fills.iter().map(|f| f.id.clone()).collect();
-        let mut order_ids: HashSet<u64> = HashSet::new();
-        let mut markets: HashSet<String> = HashSet::new();
-        for fill in batch_fills {
-            order_ids.insert(fill.maker_order_id);
-            order_ids.insert(fill.taker_order_id);
-            markets.insert(fill.market_id.clone());
-        }
-        let mut markets_vec: Vec<String> = markets.into_iter().collect();
-        markets_vec.sort();
-        let state_root = batch_state_root(&fill_ids);
-        BatchSummary {
-            batch_id: (idx + 1) as u64,
-            timestamp: window_key * WINDOW_US / 1000,
-            fill_count: batch_fills.len(),
-            order_count: order_ids.len(),
-            markets: markets_vec,
-            state_root,
-            operator_signature: format!("0x{}", "0".repeat(130)),
-            fills: fill_ids,
-        }
-    }).collect();
+    let batches: Vec<BatchSummary> = window_vec
+        .iter()
+        .enumerate()
+        .map(|(idx, (window_key, batch_fills))| {
+            let fill_ids: Vec<String> = batch_fills.iter().map(|f| f.id.clone()).collect();
+            let mut order_ids: HashSet<u64> = HashSet::new();
+            let mut markets: HashSet<String> = HashSet::new();
+            for fill in batch_fills {
+                order_ids.insert(fill.maker_order_id);
+                order_ids.insert(fill.taker_order_id);
+                markets.insert(fill.market_id.clone());
+            }
+            let mut markets_vec: Vec<String> = markets.into_iter().collect();
+            markets_vec.sort();
+            let state_root = batch_state_root(&fill_ids);
+            BatchSummary {
+                batch_id: (idx + 1) as u64,
+                timestamp: window_key * WINDOW_US / 1000,
+                fill_count: batch_fills.len(),
+                order_count: order_ids.len(),
+                markets: markets_vec,
+                state_root,
+                operator_signature: format!("0x{}", "0".repeat(130)),
+                fills: fill_ids,
+            }
+        })
+        .collect();
 
     for (idx, (window_key, batch_fills)) in window_vec.iter().enumerate() {
         let batch_id = (idx + 1) as u64;
@@ -1624,17 +2180,33 @@ async fn list_batches(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
         let has_proof = state.proofs.lock().await.contains_key(&batch_id);
         if !has_proof {
-            let proof_fills: Vec<zkvm::ProofFill> = batch_fills.iter().map(stored_fill_to_proof_fill).collect();
+            let proof_fills: Vec<zkvm::ProofFill> =
+                batch_fills.iter().map(stored_fill_to_proof_fill).collect();
             let orders_processed = batch_fills.len() as u64 * (idx as u64 + 1);
             let timestamp = window_key * WINDOW_US / 1000;
-            spawn_proof(Arc::clone(&state), batch_id, state_root_before, state_root_after.clone(), proof_fills, orders_processed, timestamp);
+            spawn_proof(
+                Arc::clone(&state),
+                batch_id,
+                state_root_before,
+                state_root_after.clone(),
+                proof_fills,
+                orders_processed,
+                timestamp,
+            );
         }
         let has_attestation = state.attestations.lock().await.contains_key(&batch_id);
         if !has_attestation {
             let fill_count = batch_fills.len() as u64;
             let orders_processed = fill_count * (idx as u64 + 1);
             let timestamp = window_key * WINDOW_US / 1000;
-            spawn_attestation(Arc::clone(&state), batch_id, state_root_after, fill_count, orders_processed, timestamp);
+            spawn_attestation(
+                Arc::clone(&state),
+                batch_id,
+                state_root_after,
+                fill_count,
+                orders_processed,
+                timestamp,
+            );
         }
     }
 
@@ -1649,7 +2221,10 @@ async fn get_batch(
     let fills = state.fills.lock().await;
     let mut windows: BTreeMap<u64, Vec<StoredFill>> = BTreeMap::new();
     for fill in fills.iter() {
-        windows.entry(fill.timestamp / WINDOW_US).or_default().push(fill.clone());
+        windows
+            .entry(fill.timestamp / WINDOW_US)
+            .or_default()
+            .push(fill.clone());
     }
     drop(fills);
 
@@ -1657,7 +2232,11 @@ async fn get_batch(
     let window_vec: Vec<(u64, Vec<StoredFill>)> = windows.into_iter().collect();
     let entry = window_vec.into_iter().enumerate().nth(target_idx);
     match entry {
-        None => (StatusCode::NOT_FOUND, Json(ApiResponse::<()>::err("batch not found"))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()>::err("batch not found")),
+        )
+            .into_response(),
         Some((idx, (window_key, batch_fills))) => {
             let fill_ids: Vec<String> = batch_fills.iter().map(|f| f.id.clone()).collect();
             let mut order_ids: HashSet<u64> = HashSet::new();
@@ -1680,7 +2259,10 @@ async fn get_batch(
                     let fills_guard = state.fills.lock().await;
                     let mut prev_windows: BTreeMap<u64, Vec<StoredFill>> = BTreeMap::new();
                     for f in fills_guard.iter() {
-                        prev_windows.entry(f.timestamp / WINDOW_US).or_default().push(f.clone());
+                        prev_windows
+                            .entry(f.timestamp / WINDOW_US)
+                            .or_default()
+                            .push(f.clone());
                     }
                     drop(fills_guard);
                     let prev_fill_ids: Vec<String> = prev_windows
@@ -1690,10 +2272,19 @@ async fn get_batch(
                         .unwrap_or_default();
                     batch_state_root(&prev_fill_ids)
                 };
-                let proof_fills: Vec<zkvm::ProofFill> = batch_fills.iter().map(stored_fill_to_proof_fill).collect();
+                let proof_fills: Vec<zkvm::ProofFill> =
+                    batch_fills.iter().map(stored_fill_to_proof_fill).collect();
                 let orders_processed = batch_fills.len() as u64;
                 let timestamp = window_key * WINDOW_US / 1000;
-                spawn_proof(Arc::clone(&state), batch_id, state_root_before, state_root_after, proof_fills, orders_processed, timestamp);
+                spawn_proof(
+                    Arc::clone(&state),
+                    batch_id,
+                    state_root_before,
+                    state_root_after,
+                    proof_fills,
+                    orders_processed,
+                    timestamp,
+                );
             }
 
             let has_attestation = state.attestations.lock().await.contains_key(&batch_id);
@@ -1701,7 +2292,14 @@ async fn get_batch(
                 let fill_count = batch_fills.len() as u64;
                 let orders_processed = fill_count;
                 let timestamp = window_key * WINDOW_US / 1000;
-                spawn_attestation(Arc::clone(&state), batch_id, state_root.clone(), fill_count, orders_processed, timestamp);
+                spawn_attestation(
+                    Arc::clone(&state),
+                    batch_id,
+                    state_root.clone(),
+                    fill_count,
+                    orders_processed,
+                    timestamp,
+                );
             }
 
             let detail = BatchDetail {
@@ -1750,7 +2348,11 @@ async fn get_state_root(State(state): State<Arc<AppState>>) -> impl IntoResponse
 
     let last_anchor_tx = state.last_anchor_tx.lock().await.clone();
     let last_anchor_time_raw = state.last_anchor_time.load(Ordering::Relaxed);
-    let last_anchor_time = if last_anchor_time_raw == 0 { None } else { Some(last_anchor_time_raw) };
+    let last_anchor_time = if last_anchor_time_raw == 0 {
+        None
+    } else {
+        Some(last_anchor_time_raw)
+    };
     let anchor_count = state.anchor_count.load(Ordering::Relaxed);
 
     Json(ApiResponse::ok(StateRootData {
@@ -1840,7 +2442,11 @@ fn seed_price_for_market(market_id: &str) -> f64 {
     }
 }
 
-fn generate_simulated_candles(market_id: &str, interval_secs: u64, limit: usize) -> Vec<OhlcvCandle> {
+fn generate_simulated_candles(
+    market_id: &str,
+    interval_secs: u64,
+    limit: usize,
+) -> Vec<OhlcvCandle> {
     let base_price = seed_price_for_market(market_id);
     let now_s = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1858,7 +2464,14 @@ fn generate_simulated_candles(market_id: &str, interval_secs: u64, limit: usize)
         let high = open.max(close) + noise.abs() * 0.3;
         let low = open.min(close) - noise.abs() * 0.3;
         let volume = base_price * 0.1 * (1.0 + (i as f64 * 0.3).sin().abs());
-        candles.push(OhlcvCandle { time, open, high, low, close, volume });
+        candles.push(OhlcvCandle {
+            time,
+            open,
+            high,
+            low,
+            close,
+            volume,
+        });
         price = close;
     }
     candles
@@ -1874,10 +2487,8 @@ async fn ohlcv_handler(
     let interval_secs = timeframe_interval_secs(timeframe);
 
     let fills = state.fills.lock().await;
-    let mut market_fills: Vec<&StoredFill> = fills
-        .iter()
-        .filter(|f| f.market_id == market_id)
-        .collect();
+    let mut market_fills: Vec<&StoredFill> =
+        fills.iter().filter(|f| f.market_id == market_id).collect();
     market_fills.sort_by_key(|f| f.timestamp);
 
     let mut buckets: BTreeMap<u64, Vec<&StoredFill>> = BTreeMap::new();
@@ -1895,7 +2506,14 @@ async fn ohlcv_handler(
             let high = bucket_fills.iter().map(|f| f.price).max().unwrap() as f64 / 1_000_000.0;
             let low = bucket_fills.iter().map(|f| f.price).min().unwrap() as f64 / 1_000_000.0;
             let volume = bucket_fills.iter().map(|f| f.quantity as f64).sum::<f64>() / 1_000_000.0;
-            OhlcvCandle { time: bucket_time, open, high, low, close, volume }
+            OhlcvCandle {
+                time: bucket_time,
+                open,
+                high,
+                low,
+                close,
+                volume,
+            }
         })
         .collect();
 
@@ -1947,10 +2565,13 @@ async fn ohlcv_feed_ws(socket: WebSocket, market: String, timeframe: String, sta
         let bucket_end_us = (bucket + interval_secs) * 1_000_000;
 
         let fills = state.fills.lock().await;
-        let mut bucket_fills: Vec<_> = fills.iter()
-            .filter(|f| f.market_id == market
-                && f.timestamp >= bucket_start_us
-                && f.timestamp < bucket_end_us)
+        let mut bucket_fills: Vec<_> = fills
+            .iter()
+            .filter(|f| {
+                f.market_id == market
+                    && f.timestamp >= bucket_start_us
+                    && f.timestamp < bucket_end_us
+            })
             .collect();
         bucket_fills.sort_by_key(|f| f.timestamp);
 
@@ -1969,7 +2590,13 @@ async fn ohlcv_feed_ws(socket: WebSocket, market: String, timeframe: String, sta
                     "candle": { "time": bucket, "open": open, "high": high, "low": low, "close": close, "volume": volume }
                 }
             });
-            if sender.send(Message::Text(serde_json::to_string(&snap).unwrap_or_default())).await.is_err() {
+            if sender
+                .send(Message::Text(
+                    serde_json::to_string(&snap).unwrap_or_default(),
+                ))
+                .await
+                .is_err()
+            {
                 return;
             }
         }
@@ -2026,7 +2653,9 @@ fn parse_decimal_amount(s: &str) -> Option<u64> {
     integer_val.checked_mul(1_000_000)?.checked_add(frac_val)
 }
 
-const KNOWN_ASSETS: &[&str] = &["ETH", "USDC", "BTC", "SOL", "AVAX", "MATIC", "LINK", "UNI", "ARB", "OP", "AAVE", "DOGE"];
+const KNOWN_ASSETS: &[&str] = &[
+    "ETH", "USDC", "BTC", "SOL", "AVAX", "MATIC", "LINK", "UNI", "ARB", "OP", "AAVE", "DOGE",
+];
 
 fn engine_error_to_message(err: &str) -> String {
     if err.contains("insufficient") || err.contains("balance") {
@@ -2066,29 +2695,41 @@ async fn get_market_fees(
         Some(m) => {
             let maker_fee_pct = m.maker_fee_bps as f64 / 100.0;
             let taker_fee_pct = m.taker_fee_bps as f64 / 100.0;
-            (StatusCode::OK, Json(ApiResponse::ok(serde_json::json!({
-                "market": market_id,
-                "maker_fee_bps": m.maker_fee_bps,
-                "taker_fee_bps": m.taker_fee_bps,
-                "maker_fee_pct": maker_fee_pct,
-                "taker_fee_pct": taker_fee_pct,
-            })))).into_response()
+            (
+                StatusCode::OK,
+                Json(ApiResponse::ok(serde_json::json!({
+                    "market": market_id,
+                    "maker_fee_bps": m.maker_fee_bps,
+                    "taker_fee_bps": m.taker_fee_bps,
+                    "maker_fee_pct": maker_fee_pct,
+                    "taker_fee_pct": taker_fee_pct,
+                }))),
+            )
+                .into_response()
         }
-        None => (StatusCode::NOT_FOUND, Json(ApiResponse::<()>::err("market not found"))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()>::err("market not found")),
+        )
+            .into_response(),
     }
 }
 
 async fn list_fees(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let engine = state.engine.lock().await;
-    let fees: Vec<serde_json::Value> = engine.markets.values().map(|m| {
-        serde_json::json!({
-            "market": m.id.0,
-            "maker_fee_bps": m.maker_fee_bps,
-            "taker_fee_bps": m.taker_fee_bps,
-            "maker_fee_pct": m.maker_fee_bps as f64 / 100.0,
-            "taker_fee_pct": m.taker_fee_bps as f64 / 100.0,
+    let fees: Vec<serde_json::Value> = engine
+        .markets
+        .values()
+        .map(|m| {
+            serde_json::json!({
+                "market": m.id.0,
+                "maker_fee_bps": m.maker_fee_bps,
+                "taker_fee_bps": m.taker_fee_bps,
+                "maker_fee_pct": m.maker_fee_bps as f64 / 100.0,
+                "taker_fee_pct": m.taker_fee_bps as f64 / 100.0,
+            })
         })
-    }).collect();
+        .collect();
     Json(ApiResponse::ok(fees))
 }
 
@@ -2121,41 +2762,90 @@ async fn register_referral(
 ) -> impl IntoResponse {
     let user = match UserId::from_hex(&body.user) {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid user address"))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid user address")),
+            )
+                .into_response()
+        }
     };
     let ref_user = match UserId::from_hex(&body.referrer) {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid ref address"))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid ref address")),
+            )
+                .into_response()
+        }
     };
     if user == ref_user {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("cannot refer yourself"))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("cannot refer yourself")),
+        )
+            .into_response();
     }
-    let msg = format!("vela:referral:{}:{}:{}", body.user.to_lowercase(), body.referrer.to_lowercase(), body.nonce).into_bytes();
-    if verify_matches_async(msg, body.signature.clone(), body.user.clone()).await.is_err() {
-        return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("invalid signature"))).into_response();
+    let msg = format!(
+        "vela:referral:{}:{}:{}",
+        body.user.to_lowercase(),
+        body.referrer.to_lowercase(),
+        body.nonce
+    )
+    .into_bytes();
+    if verify_matches_async(msg, body.signature.clone(), body.user.clone())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("invalid signature")),
+        )
+            .into_response();
     }
     let mut us = state.shards.user_state.write().await;
-    let ref_exists = us.metadata.contains_key(&ref_user)
-        || us.balances.keys().any(|(u, _)| u == &ref_user);
+    let ref_exists =
+        us.metadata.contains_key(&ref_user) || us.balances.keys().any(|(u, _)| u == &ref_user);
     if !ref_exists {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("referrer not found"))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("referrer not found")),
+        )
+            .into_response();
     }
     {
         let existing = us.metadata.get(&user);
         if existing.map(|m| m.ref_by.is_some()).unwrap_or(false) {
-            return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("referrer already set"))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("referrer already set")),
+            )
+                .into_response();
         }
     }
-    let mut user_meta = us.metadata.get(&user).cloned().unwrap_or_else(|| default_user_metadata(&user));
+    let mut user_meta = us
+        .metadata
+        .get(&user)
+        .cloned()
+        .unwrap_or_else(|| default_user_metadata(&user));
     user_meta.ref_by = Some(body.referrer.to_lowercase());
     us.metadata.insert(user.clone(), user_meta);
-    let mut ref_meta = us.metadata.get(&ref_user).cloned().unwrap_or_else(|| default_user_metadata(&ref_user));
+    let mut ref_meta = us
+        .metadata
+        .get(&ref_user)
+        .cloned()
+        .unwrap_or_else(|| default_user_metadata(&ref_user));
     let user_hex = body.user.to_lowercase();
     if !ref_meta.referred_users.contains(&user_hex) {
         ref_meta.referred_users.push(user_hex);
     }
     us.metadata.insert(ref_user, ref_meta);
-    (StatusCode::OK, Json(ApiResponse::ok(serde_json::json!({"registered": true})))).into_response()
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({"registered": true}))),
+    )
+        .into_response()
 }
 
 async fn get_referral_handler(
@@ -2164,18 +2854,32 @@ async fn get_referral_handler(
 ) -> impl IntoResponse {
     let user = match UserId::from_hex(&address) {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid address"))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid address")),
+            )
+                .into_response()
+        }
     };
     let us = state.shards.user_state.read().await;
-    let meta = us.metadata.get(&user).cloned().unwrap_or_else(|| default_user_metadata(&user));
+    let meta = us
+        .metadata
+        .get(&user)
+        .cloned()
+        .unwrap_or_else(|| default_user_metadata(&user));
     let earnings_usdc = format!("{:.6}", meta.ref_earnings as f64 / 1_000_000.0);
-    (StatusCode::OK, Json(ApiResponse::ok(serde_json::json!({
-        "address": address.to_lowercase(),
-        "referrer": meta.ref_by,
-        "referred_count": meta.referred_users.len(),
-        "total_earnings_usdc": earnings_usdc,
-        "referred_users": meta.referred_users,
-    })))).into_response()
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "address": address.to_lowercase(),
+            "referrer": meta.ref_by,
+            "referred_count": meta.referred_users.len(),
+            "total_earnings_usdc": earnings_usdc,
+            "referred_users": meta.referred_users,
+        }))),
+    )
+        .into_response()
 }
 
 async fn status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -2196,8 +2900,12 @@ async fn status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
     };
 
     let mut hasher = Keccak256::new();
-    for id in &fill_ids { hasher.update(id.as_bytes()); }
-    for id in &order_ids { hasher.update(id.as_bytes()); }
+    for id in &fill_ids {
+        hasher.update(id.as_bytes());
+    }
+    for id in &order_ids {
+        hasher.update(id.as_bytes());
+    }
     let last_state_root = format!("0x{}", hex::encode(hasher.finalize()));
 
     let last_snapshot_ts = state.last_snapshot_ts.load(Ordering::Relaxed);
@@ -2264,7 +2972,8 @@ async fn fees_public_handler(State(state): State<Arc<AppState>>) -> impl IntoRes
 
 async fn get_leaderboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let fills = state.fills.lock().await;
-    let mut volume_map: std::collections::HashMap<String, (f64, u64, u64)> = std::collections::HashMap::new();
+    let mut volume_map: std::collections::HashMap<String, (f64, u64, u64)> =
+        std::collections::HashMap::new();
     for fill in fills.iter() {
         let notional = fill.price as f64 * fill.quantity as f64 / 1_000_000_000_000.0;
         let taker = fill.taker_address.to_lowercase();
@@ -2277,29 +2986,44 @@ async fn get_leaderboard(State(state): State<Arc<AppState>>) -> impl IntoRespons
         e2.2 += 1;
     }
     drop(fills);
-    let mut traders: Vec<serde_json::Value> = volume_map.into_iter().map(|(addr, (vol, taker_count, maker_count))| {
-        serde_json::json!({
-            "address": addr,
-            "volume_usdc": format!("{:.2}", vol),
-            "fill_count": taker_count + maker_count,
-            "maker_count": maker_count,
-            "taker_count": taker_count,
+    let mut traders: Vec<serde_json::Value> = volume_map
+        .into_iter()
+        .map(|(addr, (vol, taker_count, maker_count))| {
+            serde_json::json!({
+                "address": addr,
+                "volume_usdc": format!("{:.2}", vol),
+                "fill_count": taker_count + maker_count,
+                "maker_count": maker_count,
+                "taker_count": taker_count,
+            })
         })
-    }).collect();
+        .collect();
     traders.sort_by(|a, b| {
-        let va: f64 = a["volume_usdc"].as_str().unwrap_or("0").parse().unwrap_or(0.0);
-        let vb: f64 = b["volume_usdc"].as_str().unwrap_or("0").parse().unwrap_or(0.0);
+        let va: f64 = a["volume_usdc"]
+            .as_str()
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0.0);
+        let vb: f64 = b["volume_usdc"]
+            .as_str()
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0.0);
         vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
     });
     traders.truncate(20);
     let us = state.shards.user_state.read().await;
-    let mut referrers: Vec<serde_json::Value> = us.metadata.iter()
+    let mut referrers: Vec<serde_json::Value> = us
+        .metadata
+        .iter()
         .filter(|(_, m)| !m.referred_users.is_empty() || m.ref_earnings > 0)
-        .map(|(user, m)| serde_json::json!({
-            "address": user.to_hex(),
-            "referred_count": m.referred_users.len(),
-            "earnings_usdc": format!("{:.6}", m.ref_earnings as f64 / 1_000_000.0),
-        }))
+        .map(|(user, m)| {
+            serde_json::json!({
+                "address": user.to_hex(),
+                "referred_count": m.referred_users.len(),
+                "earnings_usdc": format!("{:.6}", m.ref_earnings as f64 / 1_000_000.0),
+            })
+        })
         .collect();
     referrers.sort_by(|a, b| {
         let ra = a["referred_count"].as_u64().unwrap_or(0);
@@ -2307,11 +3031,15 @@ async fn get_leaderboard(State(state): State<Arc<AppState>>) -> impl IntoRespons
         rb.cmp(&ra)
     });
     referrers.truncate(10);
-    (StatusCode::OK, Json(ApiResponse::ok(serde_json::json!({
-        "top_traders": traders,
-        "top_referrers": referrers,
-        "period": "all_time",
-    })))).into_response()
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "top_traders": traders,
+            "top_referrers": referrers,
+            "period": "all_time",
+        }))),
+    )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -2377,9 +3105,16 @@ async fn create_incident(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateIncidentBody>,
 ) -> impl IntoResponse {
-    let provided = headers.get("x-admin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let provided = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     if !state.verify_admin_token(provided) {
-        return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("unauthorized"))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("unauthorized")),
+        )
+            .into_response();
     }
 
     let now_ms = std::time::SystemTime::now()
@@ -2418,9 +3153,16 @@ async fn create_decision(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateDecisionBody>,
 ) -> impl IntoResponse {
-    let provided = headers.get("x-admin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let provided = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     if !state.verify_admin_token(provided) {
-        return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("unauthorized"))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("unauthorized")),
+        )
+            .into_response();
     }
 
     let now_ms = std::time::SystemTime::now()
@@ -2466,7 +3208,9 @@ async fn get_market_makers(State(state): State<Arc<AppState>>) -> impl IntoRespo
         });
     }
 
-    Json(ApiResponse::ok(serde_json::json!({ "market_makers": entries })))
+    Json(ApiResponse::ok(
+        serde_json::json!({ "market_makers": entries }),
+    ))
 }
 
 async fn register_market_maker(
@@ -2474,18 +3218,38 @@ async fn register_market_maker(
     Json(body): Json<RegisterMMBody>,
 ) -> impl IntoResponse {
     if !body.address.starts_with("0x") || body.address.len() != 42 {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("invalid address"))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("invalid address")),
+        )
+            .into_response();
     }
 
     if let Some(ref name) = body.display_name {
         if name.len() > 64 {
-            return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::err("display_name exceeds 64 characters"))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("display_name exceeds 64 characters")),
+            )
+                .into_response();
         }
     }
 
-    let msg = format!("vela:mm-register:{}:{}", body.address.to_lowercase(), body.nonce).into_bytes();
-    if verify_matches_async(msg, body.signature.clone(), body.address.clone()).await.is_err() {
-        return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("invalid signature"))).into_response();
+    let msg = format!(
+        "vela:mm-register:{}:{}",
+        body.address.to_lowercase(),
+        body.nonce
+    )
+    .into_bytes();
+    if verify_matches_async(msg, body.signature.clone(), body.address.clone())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("invalid signature")),
+        )
+            .into_response();
     }
 
     let now_ms = std::time::SystemTime::now()
@@ -2495,8 +3259,15 @@ async fn register_market_maker(
 
     let mut registered = state.registered_mms.lock().await;
     let addr_lower = body.address.to_lowercase();
-    if registered.iter().any(|mm| mm.address.to_lowercase() == addr_lower) {
-        return (StatusCode::CONFLICT, Json(ApiResponse::<()>::err("address already registered"))).into_response();
+    if registered
+        .iter()
+        .any(|mm| mm.address.to_lowercase() == addr_lower)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::<()>::err("address already registered")),
+        )
+            .into_response();
     }
 
     let mm = crate::types::RegisteredMM {
@@ -2586,10 +3357,18 @@ fn compute_depth_usdc_1pct(levels: &[(u64, u64)], mid: u64, is_bid: bool) -> f64
     if mid == 0 {
         return 0.0;
     }
-    let bound = if is_bid { mid * 99 / 100 } else { mid * 101 / 100 };
+    let bound = if is_bid {
+        mid * 99 / 100
+    } else {
+        mid * 101 / 100
+    };
     let mut total_qty: u128 = 0;
     for &(price, qty) in levels {
-        let in_range = if is_bid { price >= bound } else { price <= bound };
+        let in_range = if is_bid {
+            price >= bound
+        } else {
+            price <= bound
+        };
         if !in_range {
             break;
         }
@@ -2639,17 +3418,21 @@ async fn build_analytics_data(
         asks_depth: Vec<(u64, u64)>,
         bids_depth: Vec<(u64, u64)>,
     }
-    let mut book_snaps: std::collections::HashMap<String, BookSnapshot> = std::collections::HashMap::new();
+    let mut book_snaps: std::collections::HashMap<String, BookSnapshot> =
+        std::collections::HashMap::new();
     for market_id in &market_ids {
         if let Some(shard_arc) = state.shards.shards.get(&MarketId(market_id.clone())) {
             let shard = shard_arc.lock().await;
             if let Some(book) = shard.engine.order_books.get(&MarketId(market_id.clone())) {
-                book_snaps.insert(market_id.clone(), BookSnapshot {
-                    best_bid: book.best_bid(),
-                    best_ask: book.best_ask(),
-                    asks_depth: book.depth_asks(500),
-                    bids_depth: book.depth_bids(500),
-                });
+                book_snaps.insert(
+                    market_id.clone(),
+                    BookSnapshot {
+                        best_bid: book.best_bid(),
+                        best_ask: book.best_ask(),
+                        asks_depth: book.depth_asks(500),
+                        bids_depth: book.depth_bids(500),
+                    },
+                );
             }
         }
     }
@@ -2661,7 +3444,9 @@ async fn build_analytics_data(
     for market_id in &market_ids {
         let snap = book_snaps.get(market_id.as_str());
 
-        let (best_bid, best_ask) = snap.map(|s| (s.best_bid, s.best_ask)).unwrap_or((None, None));
+        let (best_bid, best_ask) = snap
+            .map(|s| (s.best_bid, s.best_ask))
+            .unwrap_or((None, None));
 
         let current_mid = match (best_bid, best_ask) {
             (Some(bid), Some(ask)) => Some(bid + (ask - bid) / 2),
@@ -2677,15 +3462,13 @@ async fn build_analytics_data(
 
         let (slippage_1k, slippage_10k, slippage_100k, depth_bid, depth_ask) =
             match (snap, current_mid) {
-                (Some(s), Some(mid)) => {
-                    (
-                        compute_slippage_bps(&s.asks_depth, mid, 1_000),
-                        compute_slippage_bps(&s.asks_depth, mid, 10_000),
-                        compute_slippage_bps(&s.asks_depth, mid, 100_000),
-                        compute_depth_usdc_1pct(&s.bids_depth, mid, true),
-                        compute_depth_usdc_1pct(&s.asks_depth, mid, false),
-                    )
-                }
+                (Some(s), Some(mid)) => (
+                    compute_slippage_bps(&s.asks_depth, mid, 1_000),
+                    compute_slippage_bps(&s.asks_depth, mid, 10_000),
+                    compute_slippage_bps(&s.asks_depth, mid, 100_000),
+                    compute_depth_usdc_1pct(&s.bids_depth, mid, true),
+                    compute_depth_usdc_1pct(&s.asks_depth, mid, false),
+                ),
                 _ => (None, None, None, 0.0, 0.0),
             };
 
@@ -2701,7 +3484,11 @@ async fn build_analytics_data(
             .collect();
         let total_volume: f64 = notionals.iter().sum();
         let largest_fill: f64 = notionals.iter().cloned().fold(0.0f64, f64::max);
-        let avg_fill = if fill_count > 0 { total_volume / fill_count as f64 } else { 0.0 };
+        let avg_fill = if fill_count > 0 {
+            total_volume / fill_count as f64
+        } else {
+            0.0
+        };
 
         markets.push(MarketAnalytics {
             market_id: market_id.clone(),
@@ -2761,19 +3548,30 @@ async fn admin_fees_handler(
         .unwrap_or("");
 
     if !state.verify_admin_token(provided) {
-        return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("unauthorized"))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("unauthorized")),
+        )
+            .into_response();
     }
 
     let us = state.shards.user_state.read().await;
-    let fee_balances: std::collections::HashMap<String, u64> =
-        us.fee_balances.iter().map(|(k, v)| (k.clone(), *v)).collect();
+    let fee_balances: std::collections::HashMap<String, u64> = us
+        .fee_balances
+        .iter()
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
     let total_usdc = fee_balances.get("USDC").copied().unwrap_or(0);
     let total_fees_collected_usdc = format_amount(total_usdc, PRICE_DECIMALS);
 
-    (StatusCode::OK, Json(ApiResponse::ok(serde_json::json!({
-        "fee_balances": fee_balances,
-        "total_fees_collected_usdc": total_fees_collected_usdc,
-    })))).into_response()
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "fee_balances": fee_balances,
+            "total_fees_collected_usdc": total_fees_collected_usdc,
+        }))),
+    )
+        .into_response()
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -2848,7 +3646,8 @@ async fn proof_stats_handler(State(state): State<Arc<AppState>>) -> impl IntoRes
         "prover_version": "placeholder-0.1.0",
         "sp1_integration_status": "coming_soon",
         "note": "Full ZK proof generation ships post-Stanford AFT Lab (June 2026).",
-    }))).into_response()
+    })))
+    .into_response()
 }
 
 async fn proofs_list_handler(
@@ -2868,23 +3667,26 @@ async fn proofs_list_handler(
         .take(limit)
         .collect();
 
-    let items: Vec<serde_json::Value> = filtered.iter().map(|p| {
-        let status_str = match p.status {
-            zkvm::ProofStatus::Proven => "proven",
-            zkvm::ProofStatus::Pending => "pending",
-            zkvm::ProofStatus::Skipped => "skipped",
-            zkvm::ProofStatus::Failed => "failed",
-        };
-        serde_json::json!({
-            "batch_id": p.batch_id,
-            "status": status_str,
-            "prover": p.prover,
-            "generated_at": p.generated_at,
-            "proving_time_ms": p.proving_time_ms,
-            "proof_size_bytes": p.proof_size_bytes,
-            "public_inputs": p.public_inputs,
+    let items: Vec<serde_json::Value> = filtered
+        .iter()
+        .map(|p| {
+            let status_str = match p.status {
+                zkvm::ProofStatus::Proven => "proven",
+                zkvm::ProofStatus::Pending => "pending",
+                zkvm::ProofStatus::Skipped => "skipped",
+                zkvm::ProofStatus::Failed => "failed",
+            };
+            serde_json::json!({
+                "batch_id": p.batch_id,
+                "status": status_str,
+                "prover": p.prover,
+                "generated_at": p.generated_at,
+                "proving_time_ms": p.proving_time_ms,
+                "proof_size_bytes": p.proof_size_bytes,
+                "public_inputs": p.public_inputs,
+            })
         })
-    }).collect();
+        .collect();
 
     let next_cursor = filtered.last().map(|p| p.batch_id);
     drop(proofs_map);
@@ -2892,7 +3694,8 @@ async fn proofs_list_handler(
     Json(ApiResponse::ok(serde_json::json!({
         "proofs": items,
         "next_cursor": next_cursor,
-    }))).into_response()
+    })))
+    .into_response()
 }
 
 async fn batch_attestation_handler(
@@ -2977,7 +3780,8 @@ async fn tee_stats_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
             "phase_3": "NVIDIA H100 GPU attestation for ZK acceleration",
             "reference": "https://oasis.net/blog/verifiable-ai-with-tees",
         },
-    }))).into_response()
+    })))
+    .into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -3003,28 +3807,31 @@ async fn attestations_list_handler(
         .take(limit)
         .collect();
 
-    let items: Vec<serde_json::Value> = filtered.iter().map(|r| {
-        let status_str = match r.status {
-            tee::AttestationStatus::Attested => "attested",
-            tee::AttestationStatus::Simulated => "simulated",
-            tee::AttestationStatus::Pending => "pending",
-            tee::AttestationStatus::Failed => "failed",
-        };
-        let platform_str = match r.platform {
-            tee::TeePlatform::AmdSevSnp => "amd_sev_snp",
-            tee::TeePlatform::IntelTdx => "intel_tdx",
-            tee::TeePlatform::AwsNitro => "aws_nitro",
-            tee::TeePlatform::Placeholder => "placeholder",
-        };
-        serde_json::json!({
-            "batch_id": r.batch_id,
-            "status": status_str,
-            "platform": platform_str,
-            "binary_hash": format!("sha256:{}", r.binary_hash),
-            "generated_at": r.generated_at,
-            "fill_count": r.fill_count,
+    let items: Vec<serde_json::Value> = filtered
+        .iter()
+        .map(|r| {
+            let status_str = match r.status {
+                tee::AttestationStatus::Attested => "attested",
+                tee::AttestationStatus::Simulated => "simulated",
+                tee::AttestationStatus::Pending => "pending",
+                tee::AttestationStatus::Failed => "failed",
+            };
+            let platform_str = match r.platform {
+                tee::TeePlatform::AmdSevSnp => "amd_sev_snp",
+                tee::TeePlatform::IntelTdx => "intel_tdx",
+                tee::TeePlatform::AwsNitro => "aws_nitro",
+                tee::TeePlatform::Placeholder => "placeholder",
+            };
+            serde_json::json!({
+                "batch_id": r.batch_id,
+                "status": status_str,
+                "platform": platform_str,
+                "binary_hash": format!("sha256:{}", r.binary_hash),
+                "generated_at": r.generated_at,
+                "fill_count": r.fill_count,
+            })
         })
-    }).collect();
+        .collect();
 
     let next_cursor = filtered.last().map(|r| r.batch_id);
     drop(store);
@@ -3032,7 +3839,8 @@ async fn attestations_list_handler(
     Json(ApiResponse::ok(serde_json::json!({
         "attestations": items,
         "next_cursor": next_cursor,
-    }))).into_response()
+    })))
+    .into_response()
 }
 
 async fn wal_stats_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -3090,7 +3898,10 @@ mod tee_tests {
         let body: serde_json::Value = res.json();
         assert_eq!(body["ok"], true);
         assert_eq!(body["data"]["platform"], "placeholder");
-        assert!(body["data"]["binary_hash"].as_str().unwrap().starts_with("sha256:"));
+        assert!(body["data"]["binary_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
         assert_eq!(body["data"]["total_batches"], 0);
     }
 }

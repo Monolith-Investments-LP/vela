@@ -47,7 +47,11 @@ pub struct CommitteeKeypair {
 /// # Environment variables
 /// - `VELA_THRESHOLD_T` (default 3) — minimum shares needed.
 /// - `VELA_THRESHOLD_N` (default 5) — total number of committee nodes.
-pub fn generate_committee_keypair(t: u8, n: u8, rng: &mut impl RngCore) -> Result<CommitteeKeypair> {
+pub fn generate_committee_keypair(
+    t: u8,
+    n: u8,
+    rng: &mut impl RngCore,
+) -> Result<CommitteeKeypair> {
     if t == 0 || t > n {
         bail!("invalid (t={t}, n={n}): need 1 ≤ t ≤ n");
     }
@@ -64,9 +68,17 @@ pub fn generate_committee_keypair(t: u8, n: u8, rng: &mut impl RngCore) -> Resul
     // Shamir shares
     let shares = generate_shares(secret, t, n, rng);
 
-    let config = CommitteeConfig { t, n, pub_key: pub_key.clone() };
+    let config = CommitteeConfig {
+        t,
+        n,
+        pub_key: pub_key.clone(),
+    };
 
-    Ok(CommitteeKeypair { pub_key, shares, config })
+    Ok(CommitteeKeypair {
+        pub_key,
+        shares,
+        config,
+    })
 }
 
 /// Read committee (t, n) from environment variables, defaulting to (3, 5).
@@ -161,7 +173,10 @@ impl ThresholdDecryptor {
     ) -> Result<Option<PlaintextOrder>> {
         // Validate the share point is on the curve and in the subgroup.
         if !g1_is_valid(&G1(share.point.0)) {
-            bail!("invalid G1 point in DecryptionShare from node {}", share.node_index);
+            bail!(
+                "invalid G1 point in DecryptionShare from node {}",
+                share.node_index
+            );
         }
 
         let key = enc_order.order_hash;
@@ -220,7 +235,6 @@ impl ThresholdDecryptor {
         self.entries.len()
     }
 }
-
 
 // --------------------------------------------------------------------------
 // Tests

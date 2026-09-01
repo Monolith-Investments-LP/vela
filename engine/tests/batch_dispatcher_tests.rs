@@ -7,21 +7,25 @@
 //!   4. TEOB encrypted orders coalesce with plaintext orders in the same batch.
 //!   5. Single-order batch produces the correct response.
 
+use engine::{BatchDispatcher, BatchMetrics, BatchedRequest, MatchingEngine};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
-use engine::{BatchDispatcher, BatchedRequest, BatchMetrics, MatchingEngine};
 use types::{
-    AssetId, DecryptionProof, DepositRequest, FeeConfig, Market, MarketId,
-    OrderSide, OrderType, PostOrderRequest, Request, Response, UserId, PRICE_SCALE, QUANTITY_SCALE,
+    AssetId, DecryptionProof, DepositRequest, FeeConfig, Market, MarketId, OrderSide, OrderType,
+    PostOrderRequest, Request, Response, UserId, PRICE_SCALE, QUANTITY_SCALE,
 };
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn usdc() -> AssetId { AssetId::from_str("USDC") }
-fn btc()  -> AssetId { AssetId::from_str("BTC") }
+fn usdc() -> AssetId {
+    AssetId::from_str("USDC")
+}
+fn btc() -> AssetId {
+    AssetId::from_str("BTC")
+}
 
 fn user(i: u8) -> UserId {
     let mut a = [0u8; 20];
@@ -43,18 +47,24 @@ fn make_engine() -> Arc<tokio::sync::Mutex<MatchingEngine>> {
         taker_fee_bps: 5,
     });
     // Fund user 1 with USDC and BTC so orders can be posted.
-    e.process(Request::Deposit(DepositRequest {
-        user: user(1),
-        asset: usdc(),
-        amount: 1_000_000 * PRICE_SCALE,
-        l1_tx_hash: [0u8; 32],
-    }), 1);
-    e.process(Request::Deposit(DepositRequest {
-        user: user(1),
-        asset: btc(),
-        amount: 1_000 * QUANTITY_SCALE,
-        l1_tx_hash: [1u8; 32],
-    }), 2);
+    e.process(
+        Request::Deposit(DepositRequest {
+            user: user(1),
+            asset: usdc(),
+            amount: 1_000_000 * PRICE_SCALE,
+            l1_tx_hash: [0u8; 32],
+        }),
+        1,
+    );
+    e.process(
+        Request::Deposit(DepositRequest {
+            user: user(1),
+            asset: btc(),
+            amount: 1_000 * QUANTITY_SCALE,
+            l1_tx_hash: [1u8; 32],
+        }),
+        2,
+    );
     Arc::new(tokio::sync::Mutex::new(e))
 }
 
@@ -79,7 +89,12 @@ fn send_request(
     decryption_proof: Option<DecryptionProof>,
 ) -> oneshot::Receiver<Vec<Response>> {
     let (responder, rx) = oneshot::channel();
-    let item = BatchedRequest { request, ts: nonce_for_ts, responder, decryption_proof };
+    let item = BatchedRequest {
+        request,
+        ts: nonce_for_ts,
+        responder,
+        decryption_proof,
+    };
     tx.try_send(item).expect("channel send failed");
     rx
 }
@@ -113,7 +128,14 @@ async fn test_response_ordering_matches_submission_order() {
     let mut receivers: Vec<oneshot::Receiver<Vec<Response>>> = prices
         .iter()
         .enumerate()
-        .map(|(i, &price)| send_request(&tx, bid_request(price, (i + 1) as u64), (i + 1) as u64, None))
+        .map(|(i, &price)| {
+            send_request(
+                &tx,
+                bid_request(price, (i + 1) as u64),
+                (i + 1) as u64,
+                None,
+            )
+        })
         .collect();
 
     // Collect responses in submission order.
@@ -125,14 +147,22 @@ async fn test_response_ordering_matches_submission_order() {
             .expect("oneshot closed");
         // Each response set must contain an OrderPosted.
         let posted = resps.iter().find_map(|r| {
-            if let Response::OrderPosted(op) = r { Some(op.order_id) } else { None }
+            if let Response::OrderPosted(op) = r {
+                Some(op.order_id)
+            } else {
+                None
+            }
         });
         order_ids.push(posted.expect("no OrderPosted in response"));
     }
 
     // Order IDs must be strictly increasing (engine allocates sequentially).
     for w in order_ids.windows(2) {
-        assert!(w[0] < w[1], "order IDs not strictly increasing: {:?}", order_ids);
+        assert!(
+            w[0] < w[1],
+            "order IDs not strictly increasing: {:?}",
+            order_ids
+        );
     }
 }
 
@@ -212,7 +242,12 @@ async fn test_teob_and_plaintext_coalesce_in_same_batch() {
     let (result_tx, mut result_rx) = mpsc::channel(8);
 
     let dispatcher = BatchDispatcher::new(500, 256);
-    tokio::spawn(dispatcher.run(rx, Arc::clone(&engine), Arc::clone(&metrics), Some(result_tx)));
+    tokio::spawn(dispatcher.run(
+        rx,
+        Arc::clone(&engine),
+        Arc::clone(&metrics),
+        Some(result_tx),
+    ));
 
     // Plaintext order.
     let rx_plain = send_request(&tx, bid_request(7_000, 1), 1, None);
@@ -222,16 +257,28 @@ async fn test_teob_and_plaintext_coalesce_in_same_batch() {
 
     // Wait for both responses.
     let r1 = tokio::time::timeout(Duration::from_millis(200), rx_plain)
-        .await.expect("timeout").expect("closed");
+        .await
+        .expect("timeout")
+        .expect("closed");
     let r2 = tokio::time::timeout(Duration::from_millis(200), rx_teob)
-        .await.expect("timeout").expect("closed");
+        .await
+        .expect("timeout")
+        .expect("closed");
 
-    assert!(r1.iter().any(|r| matches!(r, Response::OrderPosted(_))), "plain order not posted");
-    assert!(r2.iter().any(|r| matches!(r, Response::OrderPosted(_))), "teob order not posted");
+    assert!(
+        r1.iter().any(|r| matches!(r, Response::OrderPosted(_))),
+        "plain order not posted"
+    );
+    assert!(
+        r2.iter().any(|r| matches!(r, Response::OrderPosted(_))),
+        "teob order not posted"
+    );
 
     // The BatchResult should carry exactly one decryption proof (from the TEOB order).
     let batch_result = tokio::time::timeout(Duration::from_millis(200), result_rx.recv())
-        .await.expect("no BatchResult received").expect("channel closed");
+        .await
+        .expect("no BatchResult received")
+        .expect("channel closed");
 
     assert_eq!(
         batch_result.decryption_proofs.len(),
@@ -239,7 +286,10 @@ async fn test_teob_and_plaintext_coalesce_in_same_batch() {
         "expected 1 decryption proof in BatchResult, got {}",
         batch_result.decryption_proofs.len()
     );
-    assert_eq!(batch_result.decryption_proofs[0].order_hash, proof.order_hash);
+    assert_eq!(
+        batch_result.decryption_proofs[0].order_hash,
+        proof.order_hash
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -263,11 +313,19 @@ async fn test_single_order_batch_correct_response() {
 
     // Must contain exactly one OrderPosted with status Open (resting bid).
     let posted = resps.iter().find_map(|r| {
-        if let Response::OrderPosted(op) = r { Some(op) } else { None }
+        if let Response::OrderPosted(op) = r {
+            Some(op)
+        } else {
+            None
+        }
     });
     let posted = posted.expect("no OrderPosted response in single-order batch");
     assert!(
-        matches!(posted.status, types::OrderStatus::Open | types::OrderStatus::PartiallyFilled),
-        "unexpected order status {:?}", posted.status
+        matches!(
+            posted.status,
+            types::OrderStatus::Open | types::OrderStatus::PartiallyFilled
+        ),
+        "unexpected order status {:?}",
+        posted.status
     );
 }

@@ -1,11 +1,11 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use serde::{Deserialize, Serialize};
-use serde::de::DeserializeOwned;
 use anyhow::Result;
-use tokio::io::AsyncWriteExt;
 use crc::{Crc, CRC_64_ECMA_182};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 
 const CRC64: Crc<u64> = Crc::<u64>::new(&CRC_64_ECMA_182);
 
@@ -362,7 +362,11 @@ impl Wal {
             let payload_len = u32::from_be_bytes(header[20..24].try_into().unwrap());
 
             if payload_len > MAX_PAYLOAD_SIZE {
-                tracing::warn!("WAL: suspicious payload length {} at seq {}, stopping", payload_len, seq);
+                tracing::warn!(
+                    "WAL: suspicious payload length {} at seq {}, stopping",
+                    payload_len,
+                    seq
+                );
                 break;
             }
 

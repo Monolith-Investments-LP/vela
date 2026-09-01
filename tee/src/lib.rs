@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
-use serde::{Deserialize, Serialize};
 
 fn current_time_ms() -> u64 {
     std::time::SystemTime::now()

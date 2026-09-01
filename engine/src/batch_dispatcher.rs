@@ -1,3 +1,4 @@
+use crate::MatchingEngine;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -5,7 +6,6 @@ use std::time::Instant;
 use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
 use tokio::time::Duration;
 use types::{BatchResult, DecryptionProof, Request, Response, Timestamp};
-use crate::MatchingEngine;
 
 // ---------------------------------------------------------------------------
 // BatchedRequest
@@ -61,9 +61,7 @@ impl BatchMetrics {
         let mut window = self.orders_window.lock().unwrap();
         window.push_back((now, batch_size));
         // Evict entries older than 1 second.
-        let cutoff = now
-            .checked_sub(Duration::from_secs(1))
-            .unwrap_or(now);
+        let cutoff = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
         while window.front().map(|(t, _)| *t < cutoff).unwrap_or(false) {
             window.pop_front();
         }
@@ -134,7 +132,10 @@ pub struct BatchDispatcher {
 
 impl BatchDispatcher {
     pub fn new(window_us: u64, max_batch_size: usize) -> Self {
-        BatchDispatcher { window_us, max_batch_size }
+        BatchDispatcher {
+            window_us,
+            max_batch_size,
+        }
     }
 
     /// Construct a `BatchDispatcher` from environment variables, falling back
@@ -148,7 +149,10 @@ impl BatchDispatcher {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(256usize);
-        BatchDispatcher { window_us, max_batch_size }
+        BatchDispatcher {
+            window_us,
+            max_batch_size,
+        }
     }
 
     /// Process a collected batch against the engine.
@@ -166,10 +170,8 @@ impl BatchDispatcher {
         let batch_size = pending.len();
 
         // Collect request + timestamp pairs, preserving submission order.
-        let request_ts: Vec<(Request, Timestamp)> = pending
-            .iter()
-            .map(|r| (r.request.clone(), r.ts))
-            .collect();
+        let request_ts: Vec<(Request, Timestamp)> =
+            pending.iter().map(|r| (r.request.clone(), r.ts)).collect();
 
         // Acquire engine lock ONCE for the entire batch.
         let all_responses: Vec<Vec<Response>> = {
@@ -226,8 +228,7 @@ impl BatchDispatcher {
             };
 
             let window_open = Instant::now();
-            let deadline = tokio::time::Instant::now()
-                + Duration::from_micros(self.window_us);
+            let deadline = tokio::time::Instant::now() + Duration::from_micros(self.window_us);
 
             let mut pending = Vec::with_capacity(self.max_batch_size);
             pending.push(first);
@@ -240,8 +241,7 @@ impl BatchDispatcher {
                 }
             }
 
-            let batch_result =
-                Self::dispatch_batch(pending, &engine, window_open).await;
+            let batch_result = Self::dispatch_batch(pending, &engine, window_open).await;
 
             metrics.record_batch(batch_result.batch_size, batch_result.dispatch_latency_ns);
 

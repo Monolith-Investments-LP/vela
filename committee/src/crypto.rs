@@ -75,8 +75,8 @@ pub fn encrypt(
     pub_key: &G1Affine,
     rng: &mut impl RngCore,
 ) -> Result<EncryptedOrder> {
-    let order_bytes = serde_json::to_vec(&order.0)
-        .map_err(|e| anyhow::anyhow!("serialize order: {e}"))?;
+    let order_bytes =
+        serde_json::to_vec(&order.0).map_err(|e| anyhow::anyhow!("serialize order: {e}"))?;
     let order_hash = sha3_256(&order_bytes);
 
     // Random ephemeral scalar r
@@ -137,10 +137,7 @@ pub fn partial_decrypt(sk_share: &Fr, enc: &EncryptedOrder) -> Result<G1> {
 ///
 /// `shares` is a slice of `(node_index, G1_share_point)` pairs.
 /// Returns the decrypted `PlaintextOrder` if hash verification passes.
-pub fn threshold_decrypt(
-    shares: &[(u8, G1)],
-    enc: &EncryptedOrder,
-) -> Result<PlaintextOrder> {
+pub fn threshold_decrypt(shares: &[(u8, G1)], enc: &EncryptedOrder) -> Result<PlaintextOrder> {
     if shares.is_empty() {
         bail!("no shares provided");
     }

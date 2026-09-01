@@ -1,6 +1,6 @@
-use sha3::{Digest, Keccak256};
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use rand::RngCore;
+use sha3::{Digest, Keccak256};
 use types::{UserId, VelaError};
 
 pub fn eth_message_hash(message: &[u8]) -> [u8; 32] {
@@ -19,20 +19,23 @@ pub fn recover_signer(message: &[u8], signature_hex: &str) -> Result<UserId, Vel
     }
     let hash = eth_message_hash(message);
     let v = sig_bytes[64];
-    let recovery_id = RecoveryId::try_from(v % 27)
-        .map_err(|_| VelaError::InvalidSignature)?;
-    let sig = Signature::try_from(&sig_bytes[..64])
-        .map_err(|_| VelaError::InvalidSignature)?;
+    let recovery_id = RecoveryId::try_from(v % 27).map_err(|_| VelaError::InvalidSignature)?;
+    let sig = Signature::try_from(&sig_bytes[..64]).map_err(|_| VelaError::InvalidSignature)?;
     let vk = VerifyingKey::recover_from_prehash(&hash, &sig, recovery_id)
         .map_err(|_| VelaError::InvalidSignature)?;
     let pubkey = vk.to_encoded_point(false);
     let pubkey_hash = Keccak256::digest(&pubkey.as_bytes()[1..]);
-    let addr: [u8; 20] = pubkey_hash[12..].try_into()
+    let addr: [u8; 20] = pubkey_hash[12..]
+        .try_into()
         .map_err(|_| VelaError::InvalidSignature)?;
     Ok(UserId(addr))
 }
 
-pub fn verify_matches(message: &[u8], signature_hex: &str, expected_hex: &str) -> Result<UserId, VelaError> {
+pub fn verify_matches(
+    message: &[u8],
+    signature_hex: &str,
+    expected_hex: &str,
+) -> Result<UserId, VelaError> {
     let expected = UserId::from_hex(expected_hex).map_err(|_| VelaError::InvalidSignature)?;
     let recovered = recover_signer(message, signature_hex)?;
     if recovered != expected {
@@ -50,18 +53,31 @@ pub fn order_signing_message(
     client_order_id: Option<&str>,
 ) -> Vec<u8> {
     match client_order_id {
-        None => format!("vela:order:{}:{}:{}:{}:{}", market, side, price, quantity, nonce).into_bytes(),
-        Some(coid) => format!("vela:order:{}:{}:{}:{}:{}:{}", market, side, price, quantity, nonce, coid).into_bytes(),
+        None => format!(
+            "vela:order:{}:{}:{}:{}:{}",
+            market, side, price, quantity, nonce
+        )
+        .into_bytes(),
+        Some(coid) => format!(
+            "vela:order:{}:{}:{}:{}:{}:{}",
+            market, side, price, quantity, nonce, coid
+        )
+        .into_bytes(),
     }
 }
 
-pub fn cancel_signing_message(order_id: Option<u64>, client_order_id: Option<&str>, nonce: u64) -> Vec<u8> {
+pub fn cancel_signing_message(
+    order_id: Option<u64>,
+    client_order_id: Option<&str>,
+    nonce: u64,
+) -> Vec<u8> {
     format!(
         "vela:cancel:{}:{}:{}",
         order_id.map(|i| i.to_string()).unwrap_or_default(),
         client_order_id.unwrap_or(""),
         nonce
-    ).into_bytes()
+    )
+    .into_bytes()
 }
 
 pub fn withdrawal_signing_message(asset: &str, amount: u64, nonce: u64) -> Vec<u8> {

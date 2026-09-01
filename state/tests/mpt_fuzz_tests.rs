@@ -93,8 +93,13 @@ fn bug1_no_inclusion_proof_api() {
     // SPEC: this should be O(depth) for a proper SMT.
     let single_key = make_key(b"k", 0);
     let single_val = make_value(0);
-    let found = snap.iter().any(|(k, v)| k == &single_key && v == &single_val);
-    assert!(found, "can find entry — but only by linear scan of full snapshot");
+    let found = snap
+        .iter()
+        .any(|(k, v)| k == &single_key && v == &single_val);
+    assert!(
+        found,
+        "can find entry — but only by linear scan of full snapshot"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +190,11 @@ fn bug3_snapshot_for_keys_is_selective() {
 
     let keys: Vec<Vec<u8>> = (0..5).map(|i| make_key(b"k", i)).collect();
     let partial = s.snapshot_for_keys(&keys);
-    assert_eq!(partial.len(), 5, "selective snapshot returns only requested keys");
+    assert_eq!(
+        partial.len(),
+        5,
+        "selective snapshot returns only requested keys"
+    );
 
     // This is the right interface but the caller must manually track dirty keys.
     // SPEC: SmtStore must track dirty keys internally and expose them.
@@ -282,7 +291,9 @@ fn bug5_no_proof_api_exists() {
     let target_val = make_value(5000);
 
     let snap = s.snapshot_all();
-    let found = snap.iter().any(|(k, v)| *k == target_key && *v == target_val);
+    let found = snap
+        .iter()
+        .any(|(k, v)| *k == target_key && *v == target_val);
     assert!(found, "membership check requires full O(n) snapshot scan");
 
     // SPEC: s.prove_inclusion(&target_key) should return a 256-element sibling
@@ -342,7 +353,10 @@ fn prop_root_is_order_independent() {
     }
     let r_reverse = s_reverse.compute_root();
 
-    assert_eq!(r_forward, r_reverse, "root must be insertion-order independent");
+    assert_eq!(
+        r_forward, r_reverse,
+        "root must be insertion-order independent"
+    );
 }
 
 /// Two stores with identical content must have identical roots.
@@ -425,7 +439,11 @@ fn prop_large_state_roots_are_distinct() {
         roots.insert(s.compute_root());
     }
 
-    assert_eq!(roots.len(), 5, "each state size must produce a distinct root");
+    assert_eq!(
+        roots.len(),
+        5,
+        "each state size must produce a distinct root"
+    );
 }
 
 /// Removing a key that does not exist does not change the root.
@@ -466,7 +484,10 @@ fn prop_insert_then_remove_is_identity() {
     s_with_extra.remove(&ephemeral_key);
     let r_after = s_with_extra.compute_root();
 
-    assert_eq!(r_base, r_after, "insert-then-remove must restore original root");
+    assert_eq!(
+        r_base, r_after,
+        "insert-then-remove must restore original root"
+    );
 }
 
 /// Snapshot round-trip preserves root exactly.
@@ -481,7 +502,10 @@ fn prop_snapshot_roundtrip_preserves_root() {
         s2.load_snapshot(snap);
         let root2 = s2.root().unwrap();
 
-        assert_eq!(root1, root2, "snapshot roundtrip must preserve root (n={n})");
+        assert_eq!(
+            root1, root2,
+            "snapshot roundtrip must preserve root (n={n})"
+        );
     }
 }
 
@@ -601,7 +625,10 @@ fn prop_high_cardinality_deterministic() {
     }
     let r2 = s2.compute_root();
 
-    assert_eq!(r1, r2, "2000-entry root must be insertion-order independent");
+    assert_eq!(
+        r1, r2,
+        "2000-entry root must be insertion-order independent"
+    );
     assert_ne!(r1, [0u8; 32]);
 }
 

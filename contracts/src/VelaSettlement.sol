@@ -48,12 +48,7 @@ contract VelaSettlement is ReentrancyGuard {
     event Withdrawn(address indexed user, address indexed asset, uint256 amount, uint256 nonce);
     event EmergencyExitInitiated(address indexed user, address indexed asset, uint256 unlockAt);
     event EmergencyExitExecuted(address indexed user, address indexed asset, uint256 amount);
-    event StateRootAnchored(
-        uint256 indexed anchorId,
-        bytes32 stateRoot,
-        uint256 timestamp,
-        uint256 ordersProcessed
-    );
+    event StateRootAnchored(uint256 indexed anchorId, bytes32 stateRoot, uint256 timestamp, uint256 ordersProcessed);
 
     constructor(address _operator) {
         operator = _operator;
@@ -82,24 +77,12 @@ contract VelaSettlement is ReentrancyGuard {
     /// Includes `address(this)` and `block.chainid` for domain separation,
     /// so signatures cannot be replayed against a different Vela deployment
     /// or a different chain.
-    function withdrawHash(
-        address user,
-        address asset,
-        uint256 amount,
-        uint256 nonce
-    ) public view returns (bytes32) {
-        bytes32 inner = keccak256(
-            abi.encodePacked(user, asset, amount, nonce, block.chainid, address(this))
-        );
+    function withdrawHash(address user, address asset, uint256 amount, uint256 nonce) public view returns (bytes32) {
+        bytes32 inner = keccak256(abi.encodePacked(user, asset, amount, nonce, block.chainid, address(this)));
         return inner.toEthSignedMessageHash();
     }
 
-    function withdraw(
-        address asset,
-        uint256 amount,
-        uint256 nonce,
-        bytes calldata signature
-    ) external nonReentrant {
+    function withdraw(address asset, uint256 amount, uint256 nonce, bytes calldata signature) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
         if (balances[msg.sender][asset].amount < amount) revert InsufficientBalance();
         if (usedWithdrawNonces[msg.sender][nonce]) revert NonceAlreadyUsed();
@@ -114,7 +97,7 @@ contract VelaSettlement is ReentrancyGuard {
         balances[msg.sender][asset].amount -= amount;
 
         if (asset == ETH) {
-            (bool ok,) = msg.sender.call{value: amount}("");
+            (bool ok,) = msg.sender.call{ value: amount }("");
             if (!ok) revert EthTransferFailed();
         } else {
             IERC20(asset).safeTransfer(msg.sender, amount);
@@ -141,7 +124,7 @@ contract VelaSettlement is ReentrancyGuard {
         bal.emergencyUnlockAt = 0;
 
         if (asset == ETH) {
-            (bool ok,) = msg.sender.call{value: amount}("");
+            (bool ok,) = msg.sender.call{ value: amount }("");
             if (!ok) revert EthTransferFailed();
         } else {
             IERC20(asset).safeTransfer(msg.sender, amount);
@@ -150,21 +133,20 @@ contract VelaSettlement is ReentrancyGuard {
         emit EmergencyExitExecuted(msg.sender, asset, amount);
     }
 
-    function anchorStateRoot(
-        bytes32 stateRoot,
-        uint256 ordersProcessed
-    ) external onlyOperator {
+    function anchorStateRoot(bytes32 stateRoot, uint256 ordersProcessed) external onlyOperator {
         uint256 anchorId = anchorCount++;
         anchoredStateRoots[anchorId] = stateRoot;
         emit StateRootAnchored(anchorId, stateRoot, block.timestamp, ordersProcessed);
     }
 
-    function latestAnchoredStateRoot() external view returns (
-        uint256 anchorId,
-        bytes32 stateRoot,
-        uint256 anchorCount_
-    ) {
-        if (anchorCount == 0) return (0, bytes32(0), 0);
+    function latestAnchoredStateRoot()
+        external
+        view
+        returns (uint256 anchorId, bytes32 stateRoot, uint256 anchorCount_)
+    {
+        if (anchorCount == 0) {
+            return (0, bytes32(0), 0);
+        }
         anchorId = anchorCount - 1;
         stateRoot = anchoredStateRoots[anchorId];
         anchorCount_ = anchorCount;

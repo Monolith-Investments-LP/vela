@@ -1,15 +1,19 @@
+use crate::types::{Decision, Incident, OrderFillRecord, RegisteredMM, StoredFill, StoredOrder};
+use crate::wal;
+use crate::wal::{
+    Wal, WalCheckpoint, WalDeposit, WalFillCreated, WalOrderPost, WalWithdrawalRequest,
+};
+use anyhow::Result;
+use engine::MatchingEngine;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use serde::{Deserialize, Serialize};
-use anyhow::Result;
-use engine::MatchingEngine;
-use types::{AssetId, Balance, DepositRequest, Market, Order, UserId, UserMetadata, WithdrawalRequest};
-use crate::types::{Decision, Incident, OrderFillRecord, RegisteredMM, StoredFill, StoredOrder};
-use crate::wal::{Wal, WalCheckpoint, WalDeposit, WalFillCreated, WalOrderPost, WalWithdrawalRequest};
-use crate::wal;
-use zkvm::BatchProof;
 use tee::AttestationRecord;
+use types::{
+    AssetId, Balance, DepositRequest, Market, Order, UserId, UserMetadata, WithdrawalRequest,
+};
+use zkvm::BatchProof;
 
 const SNAPSHOT_INTERVAL_SECS: u64 = 60;
 
@@ -55,10 +59,13 @@ pub async fn save_snapshot(state: Arc<crate::AppState>, clean_shutdown: bool) ->
 
         let mut balances: HashMap<String, HashMap<String, SerializedBalance>> = HashMap::new();
         for ((user, asset), balance) in &engine.balances {
-            balances
-                .entry(user.to_hex())
-                .or_default()
-                .insert(asset.as_str().to_string(), SerializedBalance { available: balance.available, locked: balance.locked });
+            balances.entry(user.to_hex()).or_default().insert(
+                asset.as_str().to_string(),
+                SerializedBalance {
+                    available: balance.available,
+                    locked: balance.locked,
+                },
+            );
         }
 
         let mut orders: HashMap<String, Vec<Order>> = HashMap::new();
@@ -73,12 +80,23 @@ pub async fn save_snapshot(state: Arc<crate::AppState>, clean_shutdown: bool) ->
             metadata.insert(user.to_hex(), meta.clone());
         }
 
-        let fee_balances: HashMap<String, u64> =
-            engine.fee_balances.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        let fee_balances: HashMap<String, u64> = engine
+            .fee_balances
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
         let timestamp = engine.timestamp;
         let sequence = engine.next_order_id();
 
-        (timestamp, balances, orders, markets, sequence, metadata, fee_balances)
+        (
+            timestamp,
+            balances,
+            orders,
+            markets,
+            sequence,
+            metadata,
+            fee_balances,
+        )
     };
 
     let n_orders: usize = orders.values().map(|v| v.len()).sum();
@@ -158,7 +176,9 @@ pub async fn run_snapshot_task(state: Arc<crate::AppState>) {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            state.last_snapshot_ts.store(ts, std::sync::atomic::Ordering::Relaxed);
+            state
+                .last_snapshot_ts
+                .store(ts, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }
@@ -177,7 +197,12 @@ pub fn restore_engine_from_snapshot(
             let asset = AssetId::from_str(&asset_str);
             engine.balances.insert(
                 (user.clone(), asset),
-                Balance { user: user.clone(), asset, available: bal.available, locked: bal.locked },
+                Balance {
+                    user: user.clone(),
+                    asset,
+                    available: bal.available,
+                    locked: bal.locked,
+                },
             );
         }
     }
@@ -378,6 +403,9 @@ pub fn replay_wal_entries(
         }
     }
 
-    tracing::info!("WAL replay complete: replayed {replayed} entries, recovered {} orders", recovered_orders.len());
+    tracing::info!(
+        "WAL replay complete: replayed {replayed} entries, recovered {} orders",
+        recovered_orders.len()
+    );
     (recovered_fills, recovered_orders)
 }

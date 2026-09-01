@@ -51,8 +51,12 @@ pub struct StoredOrder {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsClientMessage {
-    Subscribe { channels: Vec<String> },
-    Unsubscribe { channels: Vec<String> },
+    Subscribe {
+        channels: Vec<String>,
+    },
+    Unsubscribe {
+        channels: Vec<String>,
+    },
     RequestChallenge,
     Auth {
         address: String,
@@ -78,15 +82,51 @@ pub struct WsEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsServerMessage {
-    Subscribed { channels: Vec<String> },
-    BookSnapshot { market: String, bids: Vec<[String; 2]>, asks: Vec<[String; 2]> },
-    Trade { market: String, price: String, quantity: String, side: String, timestamp: u64 },
-    OrderUpdate { order_id: u64, status: String, filled_quantity: String },
-    Fill { maker_order_id: u64, taker_order_id: u64, price: String, quantity: String, side: String, maker_fee: String, taker_fee: String, timestamp: u64 },
-    BalanceUpdate { asset: String, available: String, locked: String },
-    Challenge { nonce: String },
-    Authenticated { address: String },
-    Error { code: String, message: String },
+    Subscribed {
+        channels: Vec<String>,
+    },
+    BookSnapshot {
+        market: String,
+        bids: Vec<[String; 2]>,
+        asks: Vec<[String; 2]>,
+    },
+    Trade {
+        market: String,
+        price: String,
+        quantity: String,
+        side: String,
+        timestamp: u64,
+    },
+    OrderUpdate {
+        order_id: u64,
+        status: String,
+        filled_quantity: String,
+    },
+    Fill {
+        maker_order_id: u64,
+        taker_order_id: u64,
+        price: String,
+        quantity: String,
+        side: String,
+        maker_fee: String,
+        taker_fee: String,
+        timestamp: u64,
+    },
+    BalanceUpdate {
+        asset: String,
+        available: String,
+        locked: String,
+    },
+    Challenge {
+        nonce: String,
+    },
+    Authenticated {
+        address: String,
+    },
+    Error {
+        code: String,
+        message: String,
+    },
     Pong,
 }
 
@@ -168,10 +208,18 @@ pub struct ApiResponse<T> {
 
 impl<T> ApiResponse<T> {
     pub fn ok(data: T) -> Self {
-        ApiResponse { ok: true, data: Some(data), error: None }
+        ApiResponse {
+            ok: true,
+            data: Some(data),
+            error: None,
+        }
     }
     pub fn err(msg: impl Into<String>) -> ApiResponse<()> {
-        ApiResponse { ok: false, data: None, error: Some(msg.into()) }
+        ApiResponse {
+            ok: false,
+            data: None,
+            error: Some(msg.into()),
+        }
     }
 }
 

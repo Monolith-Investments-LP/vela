@@ -3,9 +3,19 @@ use types::{AssetId, Balance, MarketId, Order, OrderId, Quantity, UserId, UserMe
 
 #[derive(Debug, Clone)]
 enum DeltaEntry {
-    Insert { market: MarketId, order: Order },
-    Remove { market: MarketId, order_id: OrderId },
-    PartialFill { market: MarketId, order_id: OrderId, additional_filled: Quantity },
+    Insert {
+        market: MarketId,
+        order: Order,
+    },
+    Remove {
+        market: MarketId,
+        order_id: OrderId,
+    },
+    PartialFill {
+        market: MarketId,
+        order_id: OrderId,
+        additional_filled: Quantity,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -22,7 +32,9 @@ impl DeltaBuffer {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.balance_overlay.is_empty() && self.metadata_overlay.is_empty() && self.entries.is_empty()
+        self.balance_overlay.is_empty()
+            && self.metadata_overlay.is_empty()
+            && self.entries.is_empty()
     }
 
     pub fn get_balance(
@@ -35,11 +47,17 @@ impl DeltaBuffer {
             .get(&(user.clone(), *asset))
             .or_else(|| base.get(&(user.clone(), *asset)))
             .cloned()
-            .unwrap_or_else(|| Balance { user: user.clone(), asset: *asset, available: 0, locked: 0 })
+            .unwrap_or_else(|| Balance {
+                user: user.clone(),
+                asset: *asset,
+                available: 0,
+                locked: 0,
+            })
     }
 
     pub fn set_balance(&mut self, balance: Balance) {
-        self.balance_overlay.insert((balance.user.clone(), balance.asset), balance);
+        self.balance_overlay
+            .insert((balance.user.clone(), balance.asset), balance);
     }
 
     pub fn credit_available(
@@ -104,7 +122,11 @@ impl DeltaBuffer {
         self.set_balance(bal);
     }
 
-    pub fn get_metadata(&self, user: &UserId, base: &EngineMap<UserId, UserMetadata>) -> UserMetadata {
+    pub fn get_metadata(
+        &self,
+        user: &UserId,
+        base: &EngineMap<UserId, UserMetadata>,
+    ) -> UserMetadata {
         self.metadata_overlay
             .get(user)
             .or_else(|| base.get(user))
@@ -123,7 +145,8 @@ impl DeltaBuffer {
     }
 
     pub fn set_metadata(&mut self, metadata: UserMetadata) {
-        self.metadata_overlay.insert(metadata.user.clone(), metadata);
+        self.metadata_overlay
+            .insert(metadata.user.clone(), metadata);
     }
 
     pub fn record_insert(&mut self, market: MarketId, order: Order) {
@@ -134,8 +157,17 @@ impl DeltaBuffer {
         self.entries.push(DeltaEntry::Remove { market, order_id });
     }
 
-    pub fn record_partial_fill(&mut self, market: MarketId, order_id: OrderId, additional_filled: Quantity) {
-        self.entries.push(DeltaEntry::PartialFill { market, order_id, additional_filled });
+    pub fn record_partial_fill(
+        &mut self,
+        market: MarketId,
+        order_id: OrderId,
+        additional_filled: Quantity,
+    ) {
+        self.entries.push(DeltaEntry::PartialFill {
+            market,
+            order_id,
+            additional_filled,
+        });
     }
 
     pub fn add_exchange_fee(&mut self, asset: &str, amount: i64) {
@@ -165,7 +197,11 @@ impl DeltaBuffer {
                         book.remove_order(order_id);
                     }
                 }
-                DeltaEntry::PartialFill { market, order_id, additional_filled } => {
+                DeltaEntry::PartialFill {
+                    market,
+                    order_id,
+                    additional_filled,
+                } => {
                     if let Some(book) = engine.order_books.get_mut(&market) {
                         book.update_filled_quantity(order_id, additional_filled);
                     }

@@ -1,12 +1,22 @@
-use std::time::Duration;
-use committer::{CommitBatch, CommitterHandle};
 use committer::handle::make_commit_batch;
+use committer::{CommitBatch, CommitterHandle};
 use engine::MatchingEngine;
-use types::{AssetId, DepositRequest, FeeConfig, Market, MarketId, Request, PRICE_SCALE, QUANTITY_SCALE};
+use std::time::Duration;
+use types::{
+    AssetId, DepositRequest, FeeConfig, Market, MarketId, Request, PRICE_SCALE, QUANTITY_SCALE,
+};
 
-fn user(i: u8) -> types::UserId { let mut a = [0u8; 20]; a[19] = i; types::UserId(a) }
-fn usdc() -> AssetId { AssetId::from_str("USDC") }
-fn btc() -> AssetId { AssetId::from_str("BTC") }
+fn user(i: u8) -> types::UserId {
+    let mut a = [0u8; 20];
+    a[19] = i;
+    types::UserId(a)
+}
+fn usdc() -> AssetId {
+    AssetId::from_str("USDC")
+}
+fn btc() -> AssetId {
+    AssetId::from_str("BTC")
+}
 
 fn funded_engine() -> MatchingEngine {
     let mut e = MatchingEngine::new(FeeConfig::default(), 1.0);
@@ -22,23 +32,21 @@ fn funded_engine() -> MatchingEngine {
         taker_fee_bps: 5,
     });
     let u = user(1);
-    e.process(Request::Deposit(DepositRequest {
-        user: u.clone(),
-        asset: usdc(),
-        amount: 100_000 * PRICE_SCALE,
-        l1_tx_hash: [0u8; 32],
-    }), 1);
+    e.process(
+        Request::Deposit(DepositRequest {
+            user: u.clone(),
+            asset: usdc(),
+            amount: 100_000 * PRICE_SCALE,
+            l1_tx_hash: [0u8; 32],
+        }),
+        1,
+    );
     e
 }
 
 #[tokio::test]
 async fn test_committer_handle_spawns_and_alive() {
-    let handle = CommitterHandle::spawn(
-        Duration::from_millis(100),
-        None,
-        64,
-        false,
-    );
+    let handle = CommitterHandle::spawn(Duration::from_millis(100), None, 64, false);
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert!(handle.is_alive());
     handle.abort();
@@ -46,12 +54,7 @@ async fn test_committer_handle_spawns_and_alive() {
 
 #[tokio::test]
 async fn test_send_batch_succeeds() {
-    let handle = CommitterHandle::spawn(
-        Duration::from_millis(100),
-        None,
-        64,
-        false,
-    );
+    let handle = CommitterHandle::spawn(Duration::from_millis(100), None, 64, false);
     let engine = funded_engine();
     let batch = make_commit_batch(&engine, vec![], 1);
     let result = handle.send_batch(batch).await;
@@ -61,20 +64,12 @@ async fn test_send_batch_succeeds() {
 
 #[tokio::test]
 async fn test_commit_result_received() {
-    let mut handle = CommitterHandle::spawn(
-        Duration::from_millis(50),
-        None,
-        64,
-        true,
-    );
+    let mut handle = CommitterHandle::spawn(Duration::from_millis(50), None, 64, true);
     let engine = funded_engine();
     let batch = make_commit_batch(&engine, vec![], 1);
     handle.send_batch(batch).await.unwrap();
 
-    let result = tokio::time::timeout(
-        Duration::from_millis(500),
-        handle.next_result(),
-    ).await;
+    let result = tokio::time::timeout(Duration::from_millis(500), handle.next_result()).await;
 
     assert!(result.is_ok(), "timed out waiting for commit result");
     let commit = result.unwrap();
@@ -87,12 +82,7 @@ async fn test_commit_result_received() {
 
 #[tokio::test]
 async fn test_multiple_batches_increment_sequence() {
-    let mut handle = CommitterHandle::spawn(
-        Duration::from_millis(50),
-        None,
-        64,
-        true,
-    );
+    let mut handle = CommitterHandle::spawn(Duration::from_millis(50), None, 64, true);
     let engine = funded_engine();
 
     for i in 1..=3 {
@@ -108,7 +98,10 @@ async fn test_multiple_batches_increment_sequence() {
         }
     }
 
-    assert!(!sequences.is_empty(), "should have received at least one commit result");
+    assert!(
+        !sequences.is_empty(),
+        "should have received at least one commit result"
+    );
     handle.abort();
 }
 
@@ -130,21 +123,33 @@ async fn test_batch_with_different_state_produces_different_roots() {
         maker_fee_bps: -1,
         taker_fee_bps: 5,
     });
-    engine2.process(Request::Deposit(DepositRequest {
-        user: user(1),
-        asset: usdc(),
-        amount: 50_000 * PRICE_SCALE,
-        l1_tx_hash: [0u8; 32],
-    }), 1);
+    engine2.process(
+        Request::Deposit(DepositRequest {
+            user: user(1),
+            asset: usdc(),
+            amount: 50_000 * PRICE_SCALE,
+            l1_tx_hash: [0u8; 32],
+        }),
+        1,
+    );
 
-    handle1.send_batch(make_commit_batch(&engine1, vec![], 1)).await.unwrap();
-    handle2.send_batch(make_commit_batch(&engine2, vec![], 1)).await.unwrap();
+    handle1
+        .send_batch(make_commit_batch(&engine1, vec![], 1))
+        .await
+        .unwrap();
+    handle2
+        .send_batch(make_commit_batch(&engine2, vec![], 1))
+        .await
+        .unwrap();
 
     let r1 = tokio::time::timeout(Duration::from_millis(500), handle1.next_result()).await;
     let r2 = tokio::time::timeout(Duration::from_millis(500), handle2.next_result()).await;
 
     if let (Ok(Some(c1)), Ok(Some(c2))) = (r1, r2) {
-        assert_ne!(c1.root, c2.root, "different state must produce different roots");
+        assert_ne!(
+            c1.root, c2.root,
+            "different state must produce different roots"
+        );
     }
 
     handle1.abort();

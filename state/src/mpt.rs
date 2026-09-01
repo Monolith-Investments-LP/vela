@@ -17,7 +17,11 @@ pub struct MptStore {
 
 impl MptStore {
     pub fn new() -> Self {
-        MptStore { nodes: BTreeMap::new(), root: None, dirty: false }
+        MptStore {
+            nodes: BTreeMap::new(),
+            root: None,
+            dirty: false,
+        }
     }
 
     pub fn root(&self) -> Option<Hash> {
@@ -63,7 +67,10 @@ impl MptStore {
     }
 
     pub fn snapshot_all(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
-        self.nodes.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        self.nodes
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     pub fn load_snapshot(&mut self, snapshot: Vec<(Vec<u8>, Vec<u8>)>) {

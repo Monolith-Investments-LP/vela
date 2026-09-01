@@ -1,14 +1,14 @@
+use crate::{BatchMetrics, BatchedRequest, EngineMap, MatchingEngine, UserState};
+use futures::future::join_all;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use futures::future::join_all;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 use tokio::time::Duration;
 use types::{
     AssetId, Balance, BatchResult, MarketId, OrderId, Request, Response, Timestamp, UserId,
     UserMetadata,
 };
-use crate::{BatchMetrics, BatchedRequest, EngineMap, MatchingEngine, UserState};
 
 pub struct MarketShard {
     pub engine: MatchingEngine,
@@ -53,7 +53,12 @@ impl MarketShards {
     ) -> BatchResult {
         let batch_size = pending.len();
 
-        type PendingItem = (Request, Timestamp, tokio::sync::oneshot::Sender<Vec<Response>>, Option<types::DecryptionProof>);
+        type PendingItem = (
+            Request,
+            Timestamp,
+            tokio::sync::oneshot::Sender<Vec<Response>>,
+            Option<types::DecryptionProof>,
+        );
         let pending_items: Vec<PendingItem> = pending
             .into_iter()
             .map(|b| (b.request, b.ts, b.responder, b.decryption_proof))
@@ -87,25 +92,23 @@ impl MarketShards {
                             })],
                         ));
                     }
-                    Request::Withdrawal(req) => {
-                        match us.phase1_withdraw(req, *ts) {
-                            Ok(()) => {
-                                let bal = us.get_balance(&req.user, &req.asset);
-                                phase1_responses.push((
-                                    idx,
-                                    vec![Response::BalanceUpdated(types::BalanceUpdatedResponse {
-                                        user: req.user.clone(),
-                                        asset: req.asset,
-                                        available: bal.available,
-                                        locked: bal.locked,
-                                    })],
-                                ));
-                            }
-                            Err(e) => {
-                                phase1_responses.push((idx, vec![Response::Error(e.into())]));
-                            }
+                    Request::Withdrawal(req) => match us.phase1_withdraw(req, *ts) {
+                        Ok(()) => {
+                            let bal = us.get_balance(&req.user, &req.asset);
+                            phase1_responses.push((
+                                idx,
+                                vec![Response::BalanceUpdated(types::BalanceUpdatedResponse {
+                                    user: req.user.clone(),
+                                    asset: req.asset,
+                                    available: bal.available,
+                                    locked: bal.locked,
+                                })],
+                            ));
                         }
-                    }
+                        Err(e) => {
+                            phase1_responses.push((idx, vec![Response::Error(e.into())]));
+                        }
+                    },
                     _ => {}
                 }
             }
@@ -126,32 +129,33 @@ impl MarketShards {
                     Request::PostOrder(req) => {
                         match us.phase1_check_balance(req, *ts, &reserved, &bal_arc, &meta_arc) {
                             Ok((order_id, spend_asset, order_notional)) => {
-                                *reserved
-                                    .entry((req.user.clone(), spend_asset))
-                                    .or_insert(0) += order_notional;
-                                per_market
-                                    .entry(req.market.clone())
-                                    .or_default()
-                                    .push((order_id, request.clone(), *ts, idx));
+                                *reserved.entry((req.user.clone(), spend_asset)).or_insert(0) +=
+                                    order_notional;
+                                per_market.entry(req.market.clone()).or_default().push((
+                                    order_id,
+                                    request.clone(),
+                                    *ts,
+                                    idx,
+                                ));
                             }
                             Err(e) => {
                                 phase1_responses.push((idx, vec![Response::Error(e.into())]));
                             }
                         }
                     }
-                    Request::CancelOrder(req) => {
-                        match us.phase1_cancel_validate(req) {
-                            Ok((order_id, market_id)) => {
-                                per_market
-                                    .entry(market_id)
-                                    .or_default()
-                                    .push((order_id, request.clone(), *ts, idx));
-                            }
-                            Err(e) => {
-                                phase1_responses.push((idx, vec![Response::Error(e.into())]));
-                            }
+                    Request::CancelOrder(req) => match us.phase1_cancel_validate(req) {
+                        Ok((order_id, market_id)) => {
+                            per_market.entry(market_id).or_default().push((
+                                order_id,
+                                request.clone(),
+                                *ts,
+                                idx,
+                            ));
                         }
-                    }
+                        Err(e) => {
+                            phase1_responses.push((idx, vec![Response::Error(e.into())]));
+                        }
+                    },
                     _ => {} // Deposits/withdrawals handled above
                 }
             }
@@ -342,8 +346,7 @@ impl MarketShards {
             };
 
             let window_open = Instant::now();
-            let deadline =
-                tokio::time::Instant::now() + Duration::from_micros(window_us);
+            let deadline = tokio::time::Instant::now() + Duration::from_micros(window_us);
 
             let mut pending = Vec::with_capacity(max_batch_size);
             pending.push(first);

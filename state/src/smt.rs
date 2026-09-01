@@ -148,8 +148,8 @@ impl SmtProof {
 /// for O(1) raw-key lookup.
 #[derive(Clone, Default)]
 struct Slot {
-    pairs: BTreeMap<Hash, Hash>,   // key_hash → val_hash (sorted for determinism)
-    keys: HashMap<Hash, Vec<u8>>,  // key_hash → raw_key (for snapshot/prove)
+    pairs: BTreeMap<Hash, Hash>, // key_hash → val_hash (sorted for determinism)
+    keys: HashMap<Hash, Vec<u8>>, // key_hash → raw_key (for snapshot/prove)
 }
 
 impl Slot {
@@ -163,7 +163,9 @@ impl Slot {
     fn remove(&mut self, raw_key: &[u8]) -> bool {
         let kh_ = key_hash(raw_key);
         let removed = self.pairs.remove(&kh_).is_some();
-        if removed { self.keys.remove(&kh_); }
+        if removed {
+            self.keys.remove(&kh_);
+        }
         removed
     }
 
@@ -174,7 +176,6 @@ impl Slot {
     fn is_empty(&self) -> bool {
         self.pairs.is_empty()
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -222,7 +223,10 @@ impl SmtStore {
     pub fn insert(&mut self, raw_key: Vec<u8>, raw_value: Vec<u8>) {
         let path = key_path(&raw_key);
         self.values.insert(raw_key.clone(), raw_value.clone());
-        self.slots.entry(path).or_default().insert(raw_key, raw_value);
+        self.slots
+            .entry(path)
+            .or_default()
+            .insert(raw_key, raw_value);
         self.dirty.insert(path);
         self.root = None;
     }
@@ -350,7 +354,11 @@ impl SmtStore {
             .map(|s| s.pairs.iter().map(|(&k, &v)| (k, v)).collect())
             .unwrap_or_default();
 
-        SmtProof { path, siblings, bucket }
+        SmtProof {
+            path,
+            siblings,
+            bucket,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -360,7 +368,10 @@ impl SmtStore {
     /// Full snapshot: all (raw_key, raw_value) pairs.  Same semantics as
     /// `MptStore::snapshot_all`, used for state recovery.
     pub fn snapshot_all(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
-        self.values.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        self.values
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     /// Delta snapshot: only the node hashes modified since `mark_committed`.
@@ -413,7 +424,12 @@ impl Default for SmtStore {
 
 /// Verify an `SmtProof` given a root and the target (key, value) pair.
 /// `value = None` for a non-inclusion proof.
-pub fn verify_proof(root: &Hash, raw_key: &[u8], raw_value: Option<&[u8]>, proof: &SmtProof) -> bool {
+pub fn verify_proof(
+    root: &Hash,
+    raw_key: &[u8],
+    raw_value: Option<&[u8]>,
+    proof: &SmtProof,
+) -> bool {
     // Validate path matches the key.
     if proof.path != key_path(raw_key) {
         return false;
@@ -442,8 +458,12 @@ pub fn verify_proof(root: &Hash, raw_key: &[u8], raw_value: Option<&[u8]>, proof
 mod tests {
     use super::*;
 
-    fn key(s: &str) -> Vec<u8> { s.as_bytes().to_vec() }
-    fn val(s: &str) -> Vec<u8> { s.as_bytes().to_vec() }
+    fn key(s: &str) -> Vec<u8> {
+        s.as_bytes().to_vec()
+    }
+    fn val(s: &str) -> Vec<u8> {
+        s.as_bytes().to_vec()
+    }
 
     #[test]
     fn empty_root_is_canonical_and_nonzero() {
@@ -479,11 +499,15 @@ mod tests {
         ];
 
         let mut s1 = SmtStore::new();
-        for (k, v) in &pairs { s1.insert(k.clone(), v.clone()); }
+        for (k, v) in &pairs {
+            s1.insert(k.clone(), v.clone());
+        }
         let r1 = s1.compute_root();
 
         let mut s2 = SmtStore::new();
-        for (k, v) in pairs.iter().rev() { s2.insert(k.clone(), v.clone()); }
+        for (k, v) in pairs.iter().rev() {
+            s2.insert(k.clone(), v.clone());
+        }
         let r2 = s2.compute_root();
 
         assert_eq!(r1, r2);
@@ -543,8 +567,14 @@ mod tests {
 
         for (k, v) in [("alice", "100"), ("bob", "200"), ("carol", "300")] {
             let proof = s.prove(k.as_bytes());
-            assert!(proof.proves_inclusion(k.as_bytes(), v.as_bytes()), "inclusion for {k}");
-            assert!(verify_proof(&root, k.as_bytes(), Some(v.as_bytes()), &proof), "verify for {k}");
+            assert!(
+                proof.proves_inclusion(k.as_bytes(), v.as_bytes()),
+                "inclusion for {k}"
+            );
+            assert!(
+                verify_proof(&root, k.as_bytes(), Some(v.as_bytes()), &proof),
+                "verify for {k}"
+            );
         }
     }
 
@@ -559,7 +589,12 @@ mod tests {
         assert!(verify_proof(&root, key("absent").as_slice(), None, &proof));
 
         // Inclusion proof should fail for an absent key
-        assert!(!verify_proof(&root, key("absent").as_slice(), Some(val("anything").as_slice()), &proof));
+        assert!(!verify_proof(
+            &root,
+            key("absent").as_slice(),
+            Some(val("anything").as_slice()),
+            &proof
+        ));
     }
 
     #[test]
@@ -570,7 +605,12 @@ mod tests {
         let proof = s.prove(key("k").as_slice());
 
         let wrong_root = [0xAAu8; 32];
-        assert!(!verify_proof(&wrong_root, key("k").as_slice(), Some(val("v").as_slice()), &proof));
+        assert!(!verify_proof(
+            &wrong_root,
+            key("k").as_slice(),
+            Some(val("v").as_slice()),
+            &proof
+        ));
     }
 
     #[test]
@@ -579,7 +619,12 @@ mod tests {
         s.insert(key("k"), val("v"));
         let root = s.compute_root();
         let proof = s.prove(key("k").as_slice());
-        assert!(!verify_proof(&root, key("k").as_slice(), Some(val("wrong").as_slice()), &proof));
+        assert!(!verify_proof(
+            &root,
+            key("k").as_slice(),
+            Some(val("wrong").as_slice()),
+            &proof
+        ));
     }
 
     #[test]
@@ -624,7 +669,8 @@ mod tests {
         assert!(
             delta.len() < full.len(),
             "delta ({}) must be smaller than full state ({})",
-            delta.len(), full.len()
+            delta.len(),
+            full.len()
         );
     }
 
@@ -643,7 +689,12 @@ mod tests {
         s2.load_delta(delta, root);
 
         let proof = s2.prove(key("alice").as_slice());
-        assert!(verify_proof(&root, key("alice").as_slice(), Some(val("100").as_slice()), &proof));
+        assert!(verify_proof(
+            &root,
+            key("alice").as_slice(),
+            Some(val("100").as_slice()),
+            &proof
+        ));
     }
 
     #[test]
@@ -675,19 +726,31 @@ mod tests {
     #[test]
     fn high_cardinality_deterministic() {
         fn xorshift(s: &mut u64) -> u64 {
-            *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; *s
+            *s ^= *s << 13;
+            *s ^= *s >> 7;
+            *s ^= *s << 17;
+            *s
         }
         let mut rng = 0xDEAD_BEEF_CAFE_BABEu64;
         let pairs: Vec<(Vec<u8>, Vec<u8>)> = (0..2_000)
-            .map(|_| (xorshift(&mut rng).to_be_bytes().to_vec(), xorshift(&mut rng).to_be_bytes().to_vec()))
+            .map(|_| {
+                (
+                    xorshift(&mut rng).to_be_bytes().to_vec(),
+                    xorshift(&mut rng).to_be_bytes().to_vec(),
+                )
+            })
             .collect();
 
         let mut s1 = SmtStore::new();
-        for (k, v) in &pairs { s1.insert(k.clone(), v.clone()); }
+        for (k, v) in &pairs {
+            s1.insert(k.clone(), v.clone());
+        }
         let r1 = s1.compute_root();
 
         let mut s2 = SmtStore::new();
-        for (k, v) in pairs.iter().rev() { s2.insert(k.clone(), v.clone()); }
+        for (k, v) in pairs.iter().rev() {
+            s2.insert(k.clone(), v.clone());
+        }
         let r2 = s2.compute_root();
 
         assert_eq!(r1, r2);
@@ -734,6 +797,11 @@ mod tests {
         let root = s.compute_root();
         let proof = s.prove(key("x").as_slice());
         assert_eq!(proof.siblings.len(), SMT_DEPTH);
-        assert!(verify_proof(&root, key("x").as_slice(), Some(val("y").as_slice()), &proof));
+        assert!(verify_proof(
+            &root,
+            key("x").as_slice(),
+            Some(val("y").as_slice()),
+            &proof
+        ));
     }
 }

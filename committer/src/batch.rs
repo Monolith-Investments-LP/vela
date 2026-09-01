@@ -1,5 +1,8 @@
 use std::collections::HashMap;
-use types::{AssetId, Balance, BatchResult, DecryptionProof, MarketId, Request, Timestamp, UserId, UserMetadata};
+use types::{
+    AssetId, Balance, BatchResult, DecryptionProof, MarketId, Request, Timestamp, UserId,
+    UserMetadata,
+};
 
 #[derive(Debug, Clone)]
 pub struct CommitBatch {

@@ -20,15 +20,17 @@
 ///   200,000 ops/sec (execution-bottlenecked; consensus theoretically >1M ops/sec
 ///   per Hyperliquid docs)
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use k256::ecdsa::SigningKey;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use sha3::{Digest, Keccak256};
-use types::{AssetId, DepositRequest, FeeConfig, Market, MarketId, Request, PRICE_SCALE, QUANTITY_SCALE};
+use types::{
+    AssetId, DepositRequest, FeeConfig, Market, MarketId, Request, PRICE_SCALE, QUANTITY_SCALE,
+};
 
 // ---------------------------------------------------------------------------
 // Market definitions
@@ -42,17 +44,72 @@ struct MarketSpec {
 }
 
 const MARKETS: &[MarketSpec] = &[
-    MarketSpec { id: "BTC-USDC",   base: "BTC",   mid: 50_000 * PRICE_SCALE, qty: QUANTITY_SCALE / 100 },
-    MarketSpec { id: "ETH-USDC",   base: "ETH",   mid:  3_000 * PRICE_SCALE, qty: QUANTITY_SCALE / 10  },
-    MarketSpec { id: "SOL-USDC",   base: "SOL",   mid:    150 * PRICE_SCALE, qty: QUANTITY_SCALE       },
-    MarketSpec { id: "AVAX-USDC",  base: "AVAX",  mid:     35 * PRICE_SCALE, qty: QUANTITY_SCALE       },
-    MarketSpec { id: "MATIC-USDC", base: "MATIC", mid:          PRICE_SCALE, qty: 10 * QUANTITY_SCALE  },
-    MarketSpec { id: "LINK-USDC",  base: "LINK",  mid:     15 * PRICE_SCALE, qty: QUANTITY_SCALE       },
-    MarketSpec { id: "UNI-USDC",   base: "UNI",   mid:     10 * PRICE_SCALE, qty: QUANTITY_SCALE       },
-    MarketSpec { id: "ARB-USDC",   base: "ARB",   mid:          PRICE_SCALE, qty: 10 * QUANTITY_SCALE  },
-    MarketSpec { id: "OP-USDC",    base: "OP",    mid:      2 * PRICE_SCALE, qty: 5 * QUANTITY_SCALE   },
-    MarketSpec { id: "AAVE-USDC",  base: "AAVE",  mid:    100 * PRICE_SCALE, qty: QUANTITY_SCALE / 10  },
-    MarketSpec { id: "DOGE-USDC",  base: "DOGE",  mid: PRICE_SCALE / 10,     qty: 100 * QUANTITY_SCALE },
+    MarketSpec {
+        id: "BTC-USDC",
+        base: "BTC",
+        mid: 50_000 * PRICE_SCALE,
+        qty: QUANTITY_SCALE / 100,
+    },
+    MarketSpec {
+        id: "ETH-USDC",
+        base: "ETH",
+        mid: 3_000 * PRICE_SCALE,
+        qty: QUANTITY_SCALE / 10,
+    },
+    MarketSpec {
+        id: "SOL-USDC",
+        base: "SOL",
+        mid: 150 * PRICE_SCALE,
+        qty: QUANTITY_SCALE,
+    },
+    MarketSpec {
+        id: "AVAX-USDC",
+        base: "AVAX",
+        mid: 35 * PRICE_SCALE,
+        qty: QUANTITY_SCALE,
+    },
+    MarketSpec {
+        id: "MATIC-USDC",
+        base: "MATIC",
+        mid: PRICE_SCALE,
+        qty: 10 * QUANTITY_SCALE,
+    },
+    MarketSpec {
+        id: "LINK-USDC",
+        base: "LINK",
+        mid: 15 * PRICE_SCALE,
+        qty: QUANTITY_SCALE,
+    },
+    MarketSpec {
+        id: "UNI-USDC",
+        base: "UNI",
+        mid: 10 * PRICE_SCALE,
+        qty: QUANTITY_SCALE,
+    },
+    MarketSpec {
+        id: "ARB-USDC",
+        base: "ARB",
+        mid: PRICE_SCALE,
+        qty: 10 * QUANTITY_SCALE,
+    },
+    MarketSpec {
+        id: "OP-USDC",
+        base: "OP",
+        mid: 2 * PRICE_SCALE,
+        qty: 5 * QUANTITY_SCALE,
+    },
+    MarketSpec {
+        id: "AAVE-USDC",
+        base: "AAVE",
+        mid: 100 * PRICE_SCALE,
+        qty: QUANTITY_SCALE / 10,
+    },
+    MarketSpec {
+        id: "DOGE-USDC",
+        base: "DOGE",
+        mid: PRICE_SCALE / 10,
+        qty: 100 * QUANTITY_SCALE,
+    },
 ];
 const NUM_MARKETS: usize = 11;
 
@@ -113,10 +170,18 @@ fn sign_order(kp: &Keypair, market: &str, side: &str, price: u64, qty: u64, nonc
         "nonce": nonce,
         "address": kp.address,
         "signature": format!("0x{}", hex::encode(&sb)),
-    })).unwrap()
+    }))
+    .unwrap()
 }
 
-fn sign_ioc_order(kp: &Keypair, market: &str, side: &str, price: u64, qty: u64, nonce: u64) -> Vec<u8> {
+fn sign_ioc_order(
+    kp: &Keypair,
+    market: &str,
+    side: &str,
+    price: u64,
+    qty: u64,
+    nonce: u64,
+) -> Vec<u8> {
     let msg = format!("vela:order:{}:{}:{}:{}:{}", market, side, price, qty, nonce);
     let hash = eth_msg_hash(msg.as_bytes());
     let (sig, recid) = kp.key.sign_prehash_recoverable(&hash).expect("sign");
@@ -133,7 +198,8 @@ fn sign_ioc_order(kp: &Keypair, market: &str, side: &str, price: u64, qty: u64, 
         "nonce": nonce,
         "address": kp.address,
         "signature": format!("0x{}", hex::encode(&sb)),
-    })).unwrap()
+    }))
+    .unwrap()
 }
 
 fn sign_cancel(kp: &Keypair, order_id: u64, nonce: u64) -> Vec<u8> {
@@ -148,7 +214,8 @@ fn sign_cancel(kp: &Keypair, order_id: u64, nonce: u64) -> Vec<u8> {
         "nonce": nonce,
         "address": kp.address,
         "signature": format!("0x{}", hex::encode(&sb)),
-    })).unwrap()
+    }))
+    .unwrap()
 }
 
 // ---------------------------------------------------------------------------
@@ -182,23 +249,29 @@ fn build_engine(keypairs: &[Keypair]) -> engine::MatchingEngine {
         h[..8].copy_from_slice(&hash_ctr.to_le_bytes());
         hash_ctr += 1;
         seq += 1;
-        eng.process(Request::Deposit(DepositRequest {
-            user: user.clone(),
-            asset: usdc.clone(),
-            amount: 1_000_000_000 * PRICE_SCALE,
-            l1_tx_hash: h,
-        }), seq);
+        eng.process(
+            Request::Deposit(DepositRequest {
+                user: user.clone(),
+                asset: usdc.clone(),
+                amount: 1_000_000_000 * PRICE_SCALE,
+                l1_tx_hash: h,
+            }),
+            seq,
+        );
         for ms in MARKETS {
             let mut h = [0u8; 32];
             h[..8].copy_from_slice(&hash_ctr.to_le_bytes());
             hash_ctr += 1;
             seq += 1;
-            eng.process(Request::Deposit(DepositRequest {
-                user: user.clone(),
-                asset: AssetId::from_str(ms.base),
-                amount: 1_000_000_000 * QUANTITY_SCALE,
-                l1_tx_hash: h,
-            }), seq);
+            eng.process(
+                Request::Deposit(DepositRequest {
+                    user: user.clone(),
+                    asset: AssetId::from_str(ms.base),
+                    amount: 1_000_000_000 * QUANTITY_SCALE,
+                    l1_tx_hash: h,
+                }),
+                seq,
+            );
         }
     }
     eng
@@ -214,7 +287,11 @@ fn rss_mb() -> u64 {
         if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
             for line in s.lines() {
                 if line.starts_with("VmRSS:") {
-                    if let Some(kb) = line.split_whitespace().nth(1).and_then(|v| v.parse::<u64>().ok()) {
+                    if let Some(kb) = line
+                        .split_whitespace()
+                        .nth(1)
+                        .and_then(|v| v.parse::<u64>().ok())
+                    {
                         return kb / 1024;
                     }
                 }
@@ -286,7 +363,7 @@ async fn mm_task(
 
     let mut nonces = vec![0u64; KEYS_PER_MM];
     let mut ki = 0usize; // current key index within this MM's slice
-    // Track resting orders: (order_id, key_index, market_idx, side)
+                         // Track resting orders: (order_id, key_index, market_idx, side)
     let mut resting: VecDeque<(u64, usize, usize, &'static str)> = VecDeque::new();
 
     let orders_url = format!("{}/orders", base_url);
@@ -309,10 +386,12 @@ async fn mm_task(
                 let cancel_body = sign_cancel(kp, oid, nonces[cancel_ki]);
 
                 let t0 = Instant::now();
-                let resp = client.post(&cancel_url)
+                let resp = client
+                    .post(&cancel_url)
                     .header("content-type", "application/json")
                     .body(cancel_body)
-                    .send().await;
+                    .send()
+                    .await;
                 let lat_ns = t0.elapsed().as_nanos() as u64;
 
                 if resp.map(|r| r.status().is_success()).unwrap_or(false) {
@@ -329,23 +408,41 @@ async fn mm_task(
                 let side_sign = if is_bid { "bid" } else { "ask" };
                 let spread_ticks = rng.gen_range(1u64..=20);
                 let spread = ms.mid / 100 * spread_ticks;
-                let price = if is_bid { ms.mid.saturating_sub(spread) } else { ms.mid + spread };
+                let price = if is_bid {
+                    ms.mid.saturating_sub(spread)
+                } else {
+                    ms.mid + spread
+                };
 
                 nonces[ki] += 1;
-                let body = sign_order(&keypairs[key_start + ki], ms.id, side_sign, price, ms.qty, nonces[ki]);
+                let body = sign_order(
+                    &keypairs[key_start + ki],
+                    ms.id,
+                    side_sign,
+                    price,
+                    ms.qty,
+                    nonces[ki],
+                );
 
                 let t0 = Instant::now();
-                if let Ok(resp) = client.post(&orders_url)
+                if let Ok(resp) = client
+                    .post(&orders_url)
                     .header("content-type", "application/json")
                     .body(body)
-                    .send().await
+                    .send()
+                    .await
                 {
                     let lat_ns = t0.elapsed().as_nanos() as u64;
                     if resp.status().is_success() {
                         if let Ok(bytes) = resp.bytes().await {
                             if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                                 if let Some(oid) = extract_order_id(&json) {
-                                    resting.push_back((oid, ki, mi, if is_bid { "bid" } else { "ask" }));
+                                    resting.push_back((
+                                        oid,
+                                        ki,
+                                        mi,
+                                        if is_bid { "bid" } else { "ask" },
+                                    ));
                                 }
                             }
                         }
@@ -364,21 +461,39 @@ async fn mm_task(
                 let is_bid = ki % 2 == 0;
                 let side_sign = if is_bid { "bid" } else { "ask" };
                 let spread = ms.mid / 100;
-                let price = if is_bid { ms.mid.saturating_sub(spread) } else { ms.mid + spread };
+                let price = if is_bid {
+                    ms.mid.saturating_sub(spread)
+                } else {
+                    ms.mid + spread
+                };
                 nonces[ki] += 1;
-                let body = sign_order(&keypairs[key_start + ki], ms.id, side_sign, price, ms.qty, nonces[ki]);
+                let body = sign_order(
+                    &keypairs[key_start + ki],
+                    ms.id,
+                    side_sign,
+                    price,
+                    ms.qty,
+                    nonces[ki],
+                );
                 let t0 = Instant::now();
-                if let Ok(resp) = client.post(&orders_url)
+                if let Ok(resp) = client
+                    .post(&orders_url)
                     .header("content-type", "application/json")
                     .body(body)
-                    .send().await
+                    .send()
+                    .await
                 {
                     let lat_ns = t0.elapsed().as_nanos() as u64;
                     if resp.status().is_success() {
                         if let Ok(bytes) = resp.bytes().await {
                             if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                                 if let Some(oid) = extract_order_id(&json) {
-                                    resting.push_back((oid, ki, mi, if is_bid { "bid" } else { "ask" }));
+                                    resting.push_back((
+                                        oid,
+                                        ki,
+                                        mi,
+                                        if is_bid { "bid" } else { "ask" },
+                                    ));
                                 }
                             }
                         }
@@ -400,21 +515,39 @@ async fn mm_task(
             let side_sign = if is_bid { "bid" } else { "ask" };
             let spread_ticks = rng.gen_range(1u64..=50);
             let spread = ms.mid / 100 * spread_ticks;
-            let price = if is_bid { ms.mid.saturating_sub(spread) } else { ms.mid + spread };
+            let price = if is_bid {
+                ms.mid.saturating_sub(spread)
+            } else {
+                ms.mid + spread
+            };
             nonces[ki] += 1;
-            let body = sign_order(&keypairs[key_start + ki], ms.id, side_sign, price, ms.qty, nonces[ki]);
+            let body = sign_order(
+                &keypairs[key_start + ki],
+                ms.id,
+                side_sign,
+                price,
+                ms.qty,
+                nonces[ki],
+            );
             let t0 = Instant::now();
-            if let Ok(resp) = client.post(&orders_url)
+            if let Ok(resp) = client
+                .post(&orders_url)
                 .header("content-type", "application/json")
                 .body(body)
-                .send().await
+                .send()
+                .await
             {
                 let lat_ns = t0.elapsed().as_nanos() as u64;
                 if resp.status().is_success() {
                     if let Ok(bytes) = resp.bytes().await {
                         if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                             if let Some(oid) = extract_order_id(&json) {
-                                resting.push_back((oid, ki, mi, if is_bid { "bid" } else { "ask" }));
+                                resting.push_back((
+                                    oid,
+                                    ki,
+                                    mi,
+                                    if is_bid { "bid" } else { "ask" },
+                                ));
                             }
                         }
                     }
@@ -434,14 +567,27 @@ async fn mm_task(
             // Cross the spread aggressively (price 5% above/below mid)
             let is_bid = rng.gen_bool(0.5);
             let side_sign = if is_bid { "bid" } else { "ask" };
-            let price = if is_bid { ms.mid * 105 / 100 } else { ms.mid * 95 / 100 };
+            let price = if is_bid {
+                ms.mid * 105 / 100
+            } else {
+                ms.mid * 95 / 100
+            };
             nonces[ki] += 1;
-            let body = sign_ioc_order(&keypairs[key_start + ki], ms.id, side_sign, price, ms.qty, nonces[ki]);
+            let body = sign_ioc_order(
+                &keypairs[key_start + ki],
+                ms.id,
+                side_sign,
+                price,
+                ms.qty,
+                nonces[ki],
+            );
             let t0 = Instant::now();
-            if let Ok(resp) = client.post(&orders_url)
+            if let Ok(resp) = client
+                .post(&orders_url)
                 .header("content-type", "application/json")
                 .body(body)
-                .send().await
+                .send()
+                .await
             {
                 let lat_ns = t0.elapsed().as_nanos() as u64;
                 if resp.status().is_success() {
@@ -539,7 +685,10 @@ async fn run() {
     let keypairs: Vec<Keypair> = (0..TOTAL_KEYS).map(|_| gen_keypair(&mut rng)).collect();
     let keypairs = Arc::new(keypairs);
 
-    eprintln!("[sustained] Building engine + funding {} users ...", TOTAL_KEYS);
+    eprintln!(
+        "[sustained] Building engine + funding {} users ...",
+        TOTAL_KEYS
+    );
     let t_setup = Instant::now();
 
     let tmp = std::env::temp_dir().join(format!(
@@ -560,10 +709,15 @@ async fn run() {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap(); });
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    eprintln!("[sustained] Server on :{port}  setup={:.1}s", t_setup.elapsed().as_secs_f64());
+    eprintln!(
+        "[sustained] Server on :{port}  setup={:.1}s",
+        t_setup.elapsed().as_secs_f64()
+    );
 
     let base_url = Arc::new(format!("http://127.0.0.1:{port}"));
 
@@ -571,9 +725,8 @@ async fn run() {
     // Shared state
     // -----------------------------------------------------------------------
     let counters = Counters::new();
-    let bucket_ops: Arc<Vec<AtomicU64>> = Arc::new(
-        (0..NUM_BUCKETS).map(|_| AtomicU64::new(0)).collect()
-    );
+    let bucket_ops: Arc<Vec<AtomicU64>> =
+        Arc::new((0..NUM_BUCKETS).map(|_| AtomicU64::new(0)).collect());
 
     // -----------------------------------------------------------------------
     // Run
@@ -588,7 +741,7 @@ async fn run() {
             .pool_max_idle_per_host(32)
             .tcp_nodelay(true)
             .build()
-            .unwrap()
+            .unwrap(),
     );
 
     let mut handles = Vec::with_capacity(NUM_MMS);
@@ -613,7 +766,9 @@ async fn run() {
         });
     }
 
-    for h in handles { h.await.unwrap(); }
+    for h in handles {
+        h.await.unwrap();
+    }
 
     let mem_t300 = rss_mb();
     let mem_t150_val = *mem_t150.lock().unwrap();
@@ -629,7 +784,10 @@ async fn run() {
         0.0
     };
 
-    let bucket_vals: Vec<u64> = bucket_ops.iter().map(|b| b.load(Ordering::Relaxed)).collect();
+    let bucket_vals: Vec<u64> = bucket_ops
+        .iter()
+        .map(|b| b.load(Ordering::Relaxed))
+        .collect();
     let peak = bucket_vals.iter().copied().max().unwrap_or(0);
     let min_tput = bucket_vals.iter().copied().min().unwrap_or(0);
     let mean_tput = if !bucket_vals.is_empty() {
@@ -637,11 +795,20 @@ async fn run() {
     } else {
         0.0
     };
-    let variance_tput = bucket_vals.iter()
-        .map(|&v| { let d = v as f64 - mean_tput; d * d })
-        .sum::<f64>() / bucket_vals.len() as f64;
+    let variance_tput = bucket_vals
+        .iter()
+        .map(|&v| {
+            let d = v as f64 - mean_tput;
+            d * d
+        })
+        .sum::<f64>()
+        / bucket_vals.len() as f64;
     let stddev_tput = variance_tput.sqrt();
-    let stability = if peak > 0 { 100.0 * mean_tput / peak as f64 } else { 0.0 };
+    let stability = if peak > 0 {
+        100.0 * mean_tput / peak as f64
+    } else {
+        0.0
+    };
 
     // Scale to ops/sec (bucket = BUCKET_SECS seconds)
     let bucket_ops_per_sec: Vec<u64> = bucket_vals.iter().map(|&v| v / BUCKET_SECS).collect();
@@ -669,8 +836,14 @@ async fn run() {
     println!("Total orders processed:      {}", total_ops);
     println!("Total fills:                 {}", total_fills);
     println!("Fill rate:                   {:.2}%", fill_rate);
-    println!("Peak throughput ({}s bucket): {} ops/sec", BUCKET_SECS, peak_ops_s);
-    println!("Min  throughput ({}s bucket): {} ops/sec", BUCKET_SECS, min_ops_s);
+    println!(
+        "Peak throughput ({}s bucket): {} ops/sec",
+        BUCKET_SECS, peak_ops_s
+    );
+    println!(
+        "Min  throughput ({}s bucket): {} ops/sec",
+        BUCKET_SECS, min_ops_s
+    );
     println!("Mean throughput:             {:.0} ops/sec", mean_ops_s);
     println!("Throughput std deviation:    {:.0} ops/sec", stddev_ops_s);
     println!("Throughput stability:        {:.1}% (mean/peak)", stability);
@@ -686,12 +859,7 @@ async fn run() {
     println!("THROUGHPUT TIME SERIES (ops/sec every {}s):", BUCKET_SECS);
     for (i, &ops_s) in bucket_ops_per_sec.iter().enumerate() {
         let t = (i as u64 + 1) * BUCKET_SECS;
-        println!(
-            "t={:>4}s: {:>8} {}",
-            t,
-            ops_s,
-            bar(ops_s, max_bar, 40)
-        );
+        println!("t={:>4}s: {:>8} {}", t, ops_s, bar(ops_s, max_bar, 40));
     }
 
     println!();

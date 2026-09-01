@@ -1,10 +1,9 @@
-use types::{
-    AssetId, Balance, CancelOrderRequest, DepositRequest, Market,
-    MarketId, OrderId, OrderSide, PostOrderRequest, Timestamp, UserId, UserMetadata, VelaError,
-    WithdrawalRequest,
-};
 use crate::credit::CreditSystem;
 use crate::{EngineMap, MatchingEngine};
+use types::{
+    AssetId, Balance, CancelOrderRequest, DepositRequest, Market, MarketId, OrderId, OrderSide,
+    PostOrderRequest, Timestamp, UserId, UserMetadata, VelaError, WithdrawalRequest,
+};
 
 pub struct UserState {
     pub balances: EngineMap<(UserId, AssetId), Balance>,
@@ -91,17 +90,20 @@ impl UserState {
 
         // Check nonce validity against snapshot (nonces not yet consumed).
         // We don't accept it here; Phase 2 shard engine accepts it.
-        let snap_meta = snap_metadata.get(&req.user).cloned().unwrap_or_else(|| UserMetadata {
-            user: req.user.clone(),
-            nonce_window: types::NonceWindow::new(),
-            open_order_ids: [0u64; 64],
-            credit_ratio: 1.0,
-            total_quoted_notional: 0,
-            actual_collateral: 0,
-            ref_by: None,
-            ref_earnings: 0,
-            referred_users: vec![],
-        });
+        let snap_meta = snap_metadata
+            .get(&req.user)
+            .cloned()
+            .unwrap_or_else(|| UserMetadata {
+                user: req.user.clone(),
+                nonce_window: types::NonceWindow::new(),
+                open_order_ids: [0u64; 64],
+                credit_ratio: 1.0,
+                total_quoted_notional: 0,
+                actual_collateral: 0,
+                ref_by: None,
+                ref_earnings: 0,
+                referred_users: vec![],
+            });
         // Check nonce would be accepted (non-destructive read)
         // We simulate by cloning and trying to accept
         let mut tmp_nonce_window = snap_meta.nonce_window.clone();
@@ -144,7 +146,9 @@ impl UserState {
         self.credit_system.check_credit(
             &req.user,
             deposited,
-            snap_meta.total_quoted_notional.saturating_add(already_reserved),
+            snap_meta
+                .total_quoted_notional
+                .saturating_add(already_reserved),
             order_notional,
             ts,
         )?;
@@ -336,12 +340,16 @@ impl UserState {
             if avail_delta >= 0 {
                 entry.available = entry.available.saturating_add(avail_delta as u64);
             } else {
-                entry.available = entry.available.saturating_sub(avail_delta.unsigned_abs() as u64);
+                entry.available = entry
+                    .available
+                    .saturating_sub(avail_delta.unsigned_abs() as u64);
             }
             if locked_delta >= 0 {
                 entry.locked = entry.locked.saturating_add(locked_delta as u64);
             } else {
-                entry.locked = entry.locked.saturating_sub(locked_delta.unsigned_abs() as u64);
+                entry.locked = entry
+                    .locked
+                    .saturating_sub(locked_delta.unsigned_abs() as u64);
             }
         }
     }
@@ -354,19 +362,25 @@ impl UserState {
     ) {
         // For each user changed in the shard, apply to current state
         for (user, final_m) in final_meta {
-            let snap_m = snapshot_meta.get(user).cloned().unwrap_or_else(|| UserMetadata {
-                user: user.clone(),
-                nonce_window: types::NonceWindow::new(),
-                open_order_ids: [0u64; 64],
-                credit_ratio: 1.0,
-                total_quoted_notional: 0,
-                actual_collateral: 0,
-                ref_by: None,
-                ref_earnings: 0,
-                referred_users: vec![],
-            });
+            let snap_m = snapshot_meta
+                .get(user)
+                .cloned()
+                .unwrap_or_else(|| UserMetadata {
+                    user: user.clone(),
+                    nonce_window: types::NonceWindow::new(),
+                    open_order_ids: [0u64; 64],
+                    credit_ratio: 1.0,
+                    total_quoted_notional: 0,
+                    actual_collateral: 0,
+                    ref_by: None,
+                    ref_earnings: 0,
+                    referred_users: vec![],
+                });
 
-            let current = self.metadata.entry(user.clone()).or_insert_with(|| snap_m.clone());
+            let current = self
+                .metadata
+                .entry(user.clone())
+                .or_insert_with(|| snap_m.clone());
 
             // Merge nonce windows: union all shards' accepted nonces so no shard overwrites another.
             current.nonce_window.merge(&final_m.nonce_window);
@@ -375,22 +389,26 @@ impl UserState {
             let notional_delta =
                 final_m.total_quoted_notional as i128 - snap_m.total_quoted_notional as i128;
             if notional_delta >= 0 {
-                current.total_quoted_notional =
-                    current.total_quoted_notional.saturating_add(notional_delta as u64);
+                current.total_quoted_notional = current
+                    .total_quoted_notional
+                    .saturating_add(notional_delta as u64);
             } else {
-                current.total_quoted_notional =
-                    current.total_quoted_notional.saturating_sub(notional_delta.unsigned_abs() as u64);
+                current.total_quoted_notional = current
+                    .total_quoted_notional
+                    .saturating_sub(notional_delta.unsigned_abs() as u64);
             }
 
             // Apply actual_collateral delta
             let collateral_delta =
                 final_m.actual_collateral as i128 - snap_m.actual_collateral as i128;
             if collateral_delta >= 0 {
-                current.actual_collateral =
-                    current.actual_collateral.saturating_add(collateral_delta as u64);
+                current.actual_collateral = current
+                    .actual_collateral
+                    .saturating_add(collateral_delta as u64);
             } else {
-                current.actual_collateral =
-                    current.actual_collateral.saturating_sub(collateral_delta.unsigned_abs() as u64);
+                current.actual_collateral = current
+                    .actual_collateral
+                    .saturating_sub(collateral_delta.unsigned_abs() as u64);
             }
 
             // Apply ref_earnings delta
@@ -400,10 +418,8 @@ impl UserState {
             }
 
             // Merge open_order_ids: add new ones, remove gone ones
-            let snap_ids: std::collections::HashSet<u64> =
-                snap_m.iter_order_ids().collect();
-            let final_ids: std::collections::HashSet<u64> =
-                final_m.iter_order_ids().collect();
+            let snap_ids: std::collections::HashSet<u64> = snap_m.iter_order_ids().collect();
+            let final_ids: std::collections::HashSet<u64> = final_m.iter_order_ids().collect();
             let added: Vec<u64> = final_ids.difference(&snap_ids).copied().collect();
             let removed: Vec<u64> = snap_ids.difference(&final_ids).copied().collect();
             for id in removed {
@@ -454,7 +470,8 @@ impl UserState {
     ) {
         self.order_to_market.remove(&order_id);
         if let Some(coid) = client_order_id {
-            self.client_order_to_market.remove(&(user.clone(), coid.to_string()));
+            self.client_order_to_market
+                .remove(&(user.clone(), coid.to_string()));
         }
     }
 
@@ -565,7 +582,10 @@ mod tests {
 
         let nonces = active_nonces(&state, &uid);
         let count = nonces.iter().filter(|&&n| n == 5).count();
-        assert_eq!(count, 1, "duplicate nonce must appear exactly once after merge");
+        assert_eq!(
+            count, 1,
+            "duplicate nonce must appear exactly once after merge"
+        );
     }
 
     // (d) Overflow: merging more than NONCE_WINDOW_SIZE total nonces evicts the oldest.
@@ -596,12 +616,20 @@ mod tests {
         state.apply_metadata_delta(&final_map_b, &snap_map);
 
         let nonces = active_nonces(&state, &uid);
-        assert_eq!(nonces.len(), NONCE_WINDOW_SIZE, "window must not exceed NONCE_WINDOW_SIZE");
+        assert_eq!(
+            nonces.len(),
+            NONCE_WINDOW_SIZE,
+            "window must not exceed NONCE_WINDOW_SIZE"
+        );
         for &n in &b_nonces {
             assert!(nonces.contains(&n), "newest nonce {} must be retained", n);
         }
         for &n in &a_nonces {
-            assert!(!nonces.contains(&n), "oldest nonce {} must be evicted on overflow", n);
+            assert!(
+                !nonces.contains(&n),
+                "oldest nonce {} must be evicted on overflow",
+                n
+            );
         }
     }
 }
