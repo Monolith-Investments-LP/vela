@@ -51,6 +51,8 @@ fn dep_req(user: UserId, asset: AssetId, amount: u64, idx: u32) -> Request {
         asset,
         amount,
         l1_tx_hash: h,
+        source_chain: Default::default(),
+        bridge_id: None,
     })
 }
 

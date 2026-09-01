@@ -255,6 +255,8 @@ fn build_engine(keypairs: &[Keypair]) -> engine::MatchingEngine {
                 asset: usdc.clone(),
                 amount: 1_000_000_000 * PRICE_SCALE,
                 l1_tx_hash: h,
+                source_chain: Default::default(),
+                bridge_id: None,
             }),
             seq,
         );
@@ -269,6 +271,8 @@ fn build_engine(keypairs: &[Keypair]) -> engine::MatchingEngine {
                     asset: AssetId::from_str(ms.base),
                     amount: 1_000_000_000 * QUANTITY_SCALE,
                     l1_tx_hash: h,
+                    source_chain: Default::default(),
+                    bridge_id: None,
                 }),
                 seq,
             );

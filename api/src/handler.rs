@@ -230,6 +230,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/withdrawals", post(initiate_withdrawal))
         .route("/withdrawal-signature", post(withdrawal_signature_handler))
         .route("/deposit", post(deposit_handler))
+        .route("/deposit/bridge", post(bridge_deposit_handler))
+        .route("/deposit/bridges", get(bridge_registry_handler))
         .route("/force-include", post(force_include_handler))
         .route("/ws", get(ws_handler))
         .route("/feed/toxicity", get(crate::toxicity_feed::handler))
@@ -1565,6 +1567,277 @@ async fn initiate_withdrawal(
     (StatusCode::OK, Json(ApiResponse::ok(responses))).into_response()
 }
 
+// ---------------------------------------------------------------------------
+// Cross-chain bridge deposits.
+//
+// Vela's direct deposit path (`/deposit`) covers Ethereum L1 (Sepolia in
+// beta, mainnet in prod). For other chains, users bridge in through an
+// approved routing partner (LiFi, Across, Relay). The bridge partner
+// verifies the source-chain deposit off-chain, exchanges the underlying
+// asset for USDC, transfers into the Vela settlement contract, and posts
+// a signed receipt to Vela via `/deposit/bridge`. Vela credits the user's
+// exchange balance after verifying the receipt against the on-chain
+// bridge allowlist.
+//
+// Trust model: each authorized bridge is a whitelisted secp256k1 public
+// key configured at boot via `VELA_BRIDGE_ALLOWLIST` (JSON array of
+// `{"bridge_id": ..., "pubkey_hex": ...}`). Compromising a bridge's key
+// lets that bridge mint credits without a real deposit, so bridges should
+// operate their own multisig/HSM. Bridges also carry brand-level risk
+// disclosure per route.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct BridgeDepositBody {
+    /// Vela user address the credit lands on.
+    user: String,
+    /// Asset that ultimately lands (usually "USDC" after bridge swap).
+    asset: String,
+    /// Amount in the asset's smallest unit (e.g., USDC micro-USD).
+    amount: String,
+    /// Which bridge submitted this receipt.
+    bridge_id: String,
+    /// Where the deposit originated (see `types::SourceChain`).
+    source_chain: String,
+    /// The bridge's transaction hash / receipt id on the source chain.
+    /// Doubles as the replay nonce; used as `DepositRequest.l1_tx_hash`.
+    source_tx_hash: String,
+    /// Signature by the bridge over the canonical deposit message.
+    /// Message layout:
+    ///   `vela:bridge-deposit:{bridge_id}:{user}:{asset}:{amount}:{source_chain}:{source_tx_hash}`
+    signature: String,
+}
+
+fn bridge_deposit_signing_message(
+    bridge_id: &str,
+    user: &str,
+    asset: &str,
+    amount_str: &str,
+    source_chain: &str,
+    source_tx_hash: &str,
+) -> Vec<u8> {
+    format!(
+        "vela:bridge-deposit:{}:{}:{}:{}:{}:{}",
+        bridge_id, user, asset, amount_str, source_chain, source_tx_hash
+    )
+    .into_bytes()
+}
+
+/// Parse `VELA_BRIDGE_ALLOWLIST` at request time. Format is a JSON array
+/// of `{"bridge_id": "lifi", "pubkey_hex": "0x04..."}`. Absent env var =
+/// no bridges allowed (all requests to `/deposit/bridge` return 503).
+fn parse_bridge_allowlist() -> std::collections::HashMap<String, String> {
+    let raw = match std::env::var("VELA_BRIDGE_ALLOWLIST") {
+        Ok(s) if !s.is_empty() => s,
+        _ => return std::collections::HashMap::new(),
+    };
+    let parsed: Vec<serde_json::Value> = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return std::collections::HashMap::new(),
+    };
+    parsed
+        .into_iter()
+        .filter_map(|v| {
+            let id = v.get("bridge_id")?.as_str()?.to_string();
+            let pk = v.get("pubkey_hex")?.as_str()?.to_string();
+            Some((id, pk))
+        })
+        .collect()
+}
+
+async fn bridge_registry_handler() -> impl IntoResponse {
+    let allowlist = parse_bridge_allowlist();
+    let bridges: Vec<serde_json::Value> = allowlist
+        .into_iter()
+        .map(|(id, pk)| {
+            serde_json::json!({
+                "bridge_id": id,
+                "pubkey_hex": pk,
+            })
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "bridges": bridges,
+            "note": "Bridges are whitelisted at boot via VELA_BRIDGE_ALLOWLIST. Deposits attested by a listed bridge are credited to the user's exchange balance.",
+        }))),
+    )
+        .into_response()
+}
+
+async fn bridge_deposit_handler(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<BridgeDepositBody>,
+) -> impl IntoResponse {
+    if !state.deposit_limiter.check(&body.user) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiResponse::<()>::err(
+                "Rate limit exceeded. Please slow down.",
+            )),
+        )
+            .into_response();
+    }
+
+    let allowlist = parse_bridge_allowlist();
+    let bridge_addr_hex = match allowlist.get(&body.bridge_id) {
+        Some(pk) => pk.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiResponse::<()>::err(format!(
+                    "bridge_id '{}' not in allowlist",
+                    body.bridge_id
+                ))),
+            )
+                .into_response()
+        }
+    };
+
+    // Verify signature. Bridge public keys are Ethereum-style addresses;
+    // verify_matches recovers signer and checks it matches the allowlist.
+    let msg = bridge_deposit_signing_message(
+        &body.bridge_id,
+        &body.user,
+        &body.asset,
+        &body.amount,
+        &body.source_chain,
+        &body.source_tx_hash,
+    );
+    if crate::auth::verify_matches_async(msg, body.signature.clone(), bridge_addr_hex)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err(
+                "bridge signature did not verify against allowlist entry",
+            )),
+        )
+            .into_response();
+    }
+
+    let user_id = match UserId::from_hex(&body.user) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid user address")),
+            )
+                .into_response()
+        }
+    };
+    let amount: u64 = match body.amount.parse() {
+        Ok(a) => a,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid amount")),
+            )
+                .into_response()
+        }
+    };
+    if amount == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("amount must be > 0")),
+        )
+            .into_response();
+    }
+
+    // Parse source_chain (lowercase string) → enum. Unknown chains
+    // default to Ethereum; unknown source-chain strings should probably
+    // reject rather than silently reclassify, so guard explicitly.
+    let source_chain = match body.source_chain.to_ascii_lowercase().as_str() {
+        "ethereum" => types::SourceChain::Ethereum,
+        "arbitrum" => types::SourceChain::Arbitrum,
+        "base" => types::SourceChain::Base,
+        "optimism" => types::SourceChain::Optimism,
+        "polygon" => types::SourceChain::Polygon,
+        "solana" => types::SourceChain::Solana,
+        "tron" => types::SourceChain::Tron,
+        "bitcoin" => types::SourceChain::Bitcoin,
+        "bnb" => types::SourceChain::Bnb,
+        "avalanche" => types::SourceChain::Avalanche,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err(format!(
+                    "unknown source_chain '{}'",
+                    body.source_chain
+                ))),
+            )
+                .into_response()
+        }
+    };
+
+    // Reuse the l1_tx_hash slot for the source-chain tx hash. Serves the
+    // same replay-nonce purpose regardless of origin chain. We hash the
+    // hex string with keccak so the byte layout is uniform.
+    let mut l1_tx_hash = [0u8; 32];
+    {
+        use sha3::{Digest, Keccak256};
+        let mut h = Keccak256::new();
+        h.update(format!("{}:{}", body.source_chain, body.source_tx_hash).as_bytes());
+        l1_tx_hash.copy_from_slice(&h.finalize());
+    }
+
+    let req = DepositRequest {
+        user: user_id,
+        asset: AssetId::from_str(&body.asset),
+        amount,
+        l1_tx_hash,
+        source_chain,
+        bridge_id: Some(body.bridge_id.clone()),
+    };
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64;
+    let (responder, resp_rx) = tokio::sync::oneshot::channel();
+    let channel_item = engine::batch_dispatcher::BatchedRequest {
+        request: EngineRequest::Deposit(req),
+        ts,
+        responder,
+        decryption_proof: None,
+    };
+    if state.order_tx.send(channel_item).await.is_err() {
+        crate::ORDER_CHANNEL_SEND_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::err("engine unavailable")),
+        )
+            .into_response();
+    }
+    let responses = match tokio::time::timeout(dispatch_timeout(), resp_rx).await {
+        Ok(Ok(r)) => r,
+        _ => {
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ApiResponse::<()>::err("engine dispatch timed out")),
+            )
+                .into_response();
+        }
+    };
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "credited": true,
+            "user": body.user.to_lowercase(),
+            "asset": body.asset,
+            "amount": body.amount,
+            "source_chain": body.source_chain,
+            "source_tx_hash": body.source_tx_hash,
+            "bridge_id": body.bridge_id,
+            "engine_responses": responses.len(),
+        }))),
+    )
+        .into_response()
+}
+
 async fn deposit_handler(
     State(state): State<Arc<AppState>>,
     Json(body): Json<DepositBody>,
@@ -1656,6 +1929,8 @@ async fn deposit_handler(
         asset: AssetId::from_str(&body.asset),
         amount,
         l1_tx_hash,
+        source_chain: Default::default(),
+        bridge_id: None,
     };
 
     let (responder, resp_rx) = tokio::sync::oneshot::channel();
@@ -1958,6 +2233,8 @@ async fn force_include_handler(
                 asset: AssetId::from_str(asset),
                 amount,
                 l1_tx_hash: hash_bytes,
+                source_chain: Default::default(),
+                bridge_id: None,
             });
             (req, uid)
         }

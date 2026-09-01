@@ -745,6 +745,51 @@ pub struct DepositRequest {
     /// Hash of the L1 transaction that locked the funds in the bridge contract.
     /// Acts as a unique nonce to prevent replay.
     pub l1_tx_hash: [u8; 32],
+    /// Source chain the deposit originated on. Ethereum mainnet / Sepolia
+    /// deposits use `SourceChain::Ethereum`. Cross-chain deposits routed
+    /// through an approved bridge carry the source chain here so the
+    /// audit trail links the credit to the original network's tx hash.
+    #[serde(default)]
+    pub source_chain: SourceChain,
+    /// Identifier of the bridge relayer that attested to this deposit.
+    /// `None` for native Ethereum deposits (event picked up directly by
+    /// the operator's L1 watcher). `Some(bridge_id)` for cross-chain.
+    #[serde(default)]
+    pub bridge_id: Option<String>,
+}
+
+/// Origin chain a deposit came from. `Ethereum` is the default so
+/// existing WAL + snapshot data continues to deserialize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SourceChain {
+    #[default]
+    Ethereum,
+    Arbitrum,
+    Base,
+    Optimism,
+    Polygon,
+    Solana,
+    Tron,
+    Bitcoin,
+    Bnb,
+    Avalanche,
+}
+
+impl SourceChain {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SourceChain::Ethereum => "ethereum",
+            SourceChain::Arbitrum => "arbitrum",
+            SourceChain::Base => "base",
+            SourceChain::Optimism => "optimism",
+            SourceChain::Polygon => "polygon",
+            SourceChain::Solana => "solana",
+            SourceChain::Tron => "tron",
+            SourceChain::Bitcoin => "bitcoin",
+            SourceChain::Bnb => "bnb",
+            SourceChain::Avalanche => "avalanche",
+        }
+    }
 }
 
 /// Initiate an on-chain settlement from the user's exchange balance.

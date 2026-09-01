@@ -53,6 +53,8 @@ fn make_engine() -> Arc<tokio::sync::Mutex<MatchingEngine>> {
             asset: usdc(),
             amount: 1_000_000 * PRICE_SCALE,
             l1_tx_hash: [0u8; 32],
+            source_chain: Default::default(),
+            bridge_id: None,
         }),
         1,
     );
@@ -62,6 +64,8 @@ fn make_engine() -> Arc<tokio::sync::Mutex<MatchingEngine>> {
             asset: btc(),
             amount: 1_000 * QUANTITY_SCALE,
             l1_tx_hash: [1u8; 32],
+            source_chain: Default::default(),
+            bridge_id: None,
         }),
         2,
     );

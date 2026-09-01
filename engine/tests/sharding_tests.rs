@@ -50,6 +50,8 @@ async fn deposit(user_state: &Arc<RwLock<UserState>>, user: UserId, asset: &str,
         asset: AssetId::from_str(asset),
         amount,
         l1_tx_hash: [0u8; 32],
+        source_chain: Default::default(),
+        bridge_id: None,
     };
     let mut us = user_state.write().await;
     us.phase1_deposit(&req);

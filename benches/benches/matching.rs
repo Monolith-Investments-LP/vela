@@ -199,6 +199,8 @@ impl SimState {
                         h[0] = mm;
                         h
                     },
+                    source_chain: Default::default(),
+                    bridge_id: None,
                 }),
                 ts,
             );
@@ -217,6 +219,8 @@ impl SimState {
                             h[1] = i as u8;
                             h
                         },
+                        source_chain: Default::default(),
+                        bridge_id: None,
                     }),
                     ts,
                 );
@@ -234,6 +238,8 @@ impl SimState {
                 asset: usdc(),
                 amount: 100_000_000 * PRICE_SCALE,
                 l1_tx_hash: [0xffu8; 32],
+                source_chain: Default::default(),
+                bridge_id: None,
             }),
             ts,
         );
@@ -250,6 +256,8 @@ impl SimState {
                         h[1] = i as u8;
                         h
                     },
+                    source_chain: Default::default(),
+                    bridge_id: None,
                 }),
                 ts,
             );
@@ -1172,6 +1180,8 @@ fn build_deep_sim(target_levels_per_side: usize) -> SimState {
                     h[31] = 0xDD;
                     h
                 },
+                source_chain: Default::default(),
+                bridge_id: None,
             }),
             ts,
         );
@@ -1189,6 +1199,8 @@ fn build_deep_sim(target_levels_per_side: usize) -> SimState {
                         h[31] = 0xDD;
                         h
                     },
+                    source_chain: Default::default(),
+                    bridge_id: None,
                 }),
                 ts,
             );
@@ -1203,6 +1215,8 @@ fn build_deep_sim(target_levels_per_side: usize) -> SimState {
             asset: usdc(),
             amount: big_usdc,
             l1_tx_hash: [0xddu8; 32],
+            source_chain: Default::default(),
+            bridge_id: None,
         }),
         ts,
     );
@@ -1218,6 +1232,8 @@ fn build_deep_sim(target_levels_per_side: usize) -> SimState {
                     h[1] = i as u8;
                     h
                 },
+                source_chain: Default::default(),
+                bridge_id: None,
             }),
             ts,
         );

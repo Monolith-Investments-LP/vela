@@ -27,6 +27,8 @@ fn deposit_req(u: &UserId, amount: u64) -> Request {
         asset: usdc(),
         amount,
         l1_tx_hash: [0u8; 32],
+        source_chain: Default::default(),
+        bridge_id: None,
     })
 }
 
@@ -49,6 +51,8 @@ fn funded_engine() -> MatchingEngine {
             asset: usdc(),
             amount: 100_000 * PRICE_SCALE,
             l1_tx_hash: [0u8; 32],
+            source_chain: Default::default(),
+            bridge_id: None,
         }),
         1,
     );

@@ -376,6 +376,8 @@ pub fn replay_wal_entries(
                                     asset,
                                     amount: dep.amount,
                                     l1_tx_hash: hash,
+                                    source_chain: Default::default(),
+                                    bridge_id: None,
                                 }),
                                 0,
                             );

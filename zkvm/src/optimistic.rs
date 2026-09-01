@@ -201,6 +201,8 @@ mod tests {
             asset: AssetId::from_str(asset),
             amount,
             l1_tx_hash: [0u8; 32],
+            source_chain: Default::default(),
+            bridge_id: None,
         })
     }
 

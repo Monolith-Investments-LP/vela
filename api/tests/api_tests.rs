@@ -48,6 +48,8 @@ fn funded_engine() -> EngineWithUser {
             asset: AssetId::from_str("USDC"),
             amount: 100_000 * PRICE_SCALE,
             l1_tx_hash: [0u8; 32],
+            source_chain: Default::default(),
+            bridge_id: None,
         }),
         1,
     );
@@ -57,6 +59,8 @@ fn funded_engine() -> EngineWithUser {
             asset: AssetId::from_str("BTC"),
             amount: 2 * QUANTITY_SCALE,
             l1_tx_hash: [1u8; 32],
+            source_chain: Default::default(),
+            bridge_id: None,
         }),
         2,
     );
@@ -137,6 +141,8 @@ async fn test_get_balances_after_deposit() {
             asset: AssetId::from_str("USDC"),
             amount: 50_000 * PRICE_SCALE,
             l1_tx_hash: [0u8; 32],
+            source_chain: Default::default(),
+            bridge_id: None,
         }),
         1,
     );
@@ -201,6 +207,8 @@ async fn test_get_order_by_client_id_found() {
             asset: AssetId::from_str("USDC"),
             amount: 100_000 * PRICE_SCALE,
             l1_tx_hash: [0u8; 32],
+            source_chain: Default::default(),
+            bridge_id: None,
         }),
         1,
     );

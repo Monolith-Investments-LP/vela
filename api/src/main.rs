@@ -49,6 +49,8 @@ fn seed_markets(engine: &mut MatchingEngine) {
                 asset: AssetId::from_str(asset),
                 amount: 1_000_000_000_000,
                 l1_tx_hash: hash,
+                source_chain: Default::default(),
+                bridge_id: None,
             }),
             0,
         );
@@ -72,6 +74,8 @@ fn seed_order_books(engine: &mut MatchingEngine) {
             asset: AssetId::from_str("USDC"),
             amount: 10_000_000_000_000_000,
             l1_tx_hash: make_hash(0, 0),
+            source_chain: Default::default(),
+            bridge_id: None,
         }),
         0,
     );
@@ -89,6 +93,8 @@ fn seed_order_books(engine: &mut MatchingEngine) {
                 asset: AssetId::from_str(asset),
                 amount: 100_000_000_000_000,
                 l1_tx_hash: make_hash(1, i as u8),
+                source_chain: Default::default(),
+                bridge_id: None,
             }),
             0,
         );

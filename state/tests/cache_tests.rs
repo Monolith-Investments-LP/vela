@@ -201,6 +201,8 @@ fn test_state_manager_commit_batch() {
             asset: usdc(),
             amount: 100_000 * PRICE_SCALE,
             l1_tx_hash: [0u8; 32],
+            source_chain: Default::default(),
+            bridge_id: None,
         }),
         1,
     );

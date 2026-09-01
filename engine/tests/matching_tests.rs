@@ -46,6 +46,8 @@ fn deposit(user: UserId, asset: AssetId, amount: u64) -> Request {
         asset,
         amount,
         l1_tx_hash: [0u8; 32],
+        source_chain: Default::default(),
+        bridge_id: None,
     })
 }
 

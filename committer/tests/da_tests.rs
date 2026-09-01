@@ -40,6 +40,8 @@ fn funded_engine() -> MatchingEngine {
             asset: usdc(),
             amount: 100_000 * PRICE_SCALE,
             l1_tx_hash: [0u8; 32],
+            source_chain: Default::default(),
+            bridge_id: None,
         }),
         1,
     );
@@ -128,6 +130,8 @@ async fn test_two_different_batches_produce_different_receipts() {
             asset: usdc(),
             amount: 50_000 * PRICE_SCALE, // different amount
             l1_tx_hash: [1u8; 32],
+            source_chain: Default::default(),
+            bridge_id: None,
         }),
         1,
     );
