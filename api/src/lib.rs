@@ -9,6 +9,7 @@ pub mod algos;
 pub mod anchor;
 pub mod auth;
 pub mod committee_handler;
+pub mod credit;
 pub mod da;
 pub mod feeds;
 pub mod handler;
@@ -127,6 +128,10 @@ pub struct AppState {
     /// re-issuance, which is intentional (stale scores shouldn't outlive
     /// process state).
     pub reputation_cache: Arc<dashmap::DashMap<String, crate::reputation::ReputationScore>>,
+    /// Active reputation-collateralized credit lines. Keyed by
+    /// lowercase address; at most one live line per address in v1.
+    /// Expiry sweep runs every 10 s via `credit::run_expiry_task`.
+    pub credit_lines: crate::credit::CreditRegistry,
     /// Admin bearer token — read from ADMIN_TOKEN at boot and used in
     /// constant-time comparisons via `AppState::verify_admin_token`.
     admin_token: String,
@@ -298,6 +303,7 @@ impl AppState {
             rfq: crate::rfq::RfqRegistry::new(),
             agent_tier_clears: std::sync::Arc::new(dashmap::DashMap::new()),
             reputation_cache: std::sync::Arc::new(dashmap::DashMap::new()),
+            credit_lines: crate::credit::new_registry(),
             admin_token,
         });
 
@@ -318,6 +324,7 @@ impl AppState {
         tokio::spawn(historical::run_export_task(Arc::clone(&state)));
         tokio::spawn(handler::run_fee_tier_task(Arc::clone(&state)));
         tokio::spawn(handler::run_listing_task(Arc::clone(&state)));
+        tokio::spawn(credit::run_expiry_task(Arc::clone(&state)));
 
         state
     }

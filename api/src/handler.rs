@@ -281,6 +281,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(crate::reputation::attest_handler),
         )
         .route("/reputation/:address", get(crate::reputation::get_handler))
+        .route("/credit/open", post(crate::credit::open_handler))
+        .route("/credit/close", post(crate::credit::close_handler))
+        .route("/credit/:address", get(crate::credit::get_handler))
         .route("/orders/algo/twap", post(post_twap_algo))
         .route("/orders/algo/cancel", post(cancel_algo))
         .route("/orders/algo/:parent_id", get(get_algo_status))
