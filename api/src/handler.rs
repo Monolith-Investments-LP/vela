@@ -274,6 +274,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/vaults/:vault_id/deposit", post(vault_deposit))
         .route("/vaults/:vault_id/withdraw", post(vault_withdraw))
         .route("/vaults/:vault_id/positions/:lp", get(get_lp_position))
+        .route("/subaccounts/create", post(create_subaccount))
+        .route("/subaccounts/transfer", post(transfer_subaccount))
+        .route("/subaccounts/:master", get(list_subaccounts))
         .route("/anchors", get(get_anchors))
         .route("/incidents", get(get_incidents))
         .route("/admin/incidents", post(create_incident))
@@ -3632,6 +3635,258 @@ async fn get_points_handler(
                 "referral_multiplier": POINTS_REFERRAL_MULTIPLIER,
                 "taker_penalty": "notional * (1 - toxicity_score); fills with score > 0.5 are counted as toxic",
             },
+        }))),
+    )
+        .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Sub-accounts (v1 MVP — see api::subaccounts module docs).
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct CreateSubaccountBody {
+    master: String,
+    subaccount_id: u32,
+    name: String,
+    /// Signature by master over
+    /// `vela:subaccount:create:{subaccount_id}:{name}:{nonce}`.
+    nonce: u64,
+    signature: String,
+}
+
+fn subaccount_create_signing_message(subaccount_id: u32, name: &str, nonce: u64) -> Vec<u8> {
+    format!(
+        "vela:subaccount:create:{}:{}:{}",
+        subaccount_id, name, nonce
+    )
+    .into_bytes()
+}
+
+async fn create_subaccount(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateSubaccountBody>,
+) -> impl IntoResponse {
+    let master = match UserId::from_hex(&body.master) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid master address")),
+            )
+                .into_response()
+        }
+    };
+    let msg = subaccount_create_signing_message(body.subaccount_id, &body.name, body.nonce);
+    if crate::auth::verify_matches_async(msg, body.signature.clone(), body.master.clone())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err(
+                "master signature did not match payload",
+            )),
+        )
+            .into_response();
+    }
+
+    let key = (body.master.to_lowercase(), body.subaccount_id);
+    if state.subaccounts.subs.contains_key(&key) {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::<()>::err(
+                "subaccount_id already exists for this master",
+            )),
+        )
+            .into_response();
+    }
+
+    let sub_user_id = crate::subaccounts::derive_sub_user_id(&master, body.subaccount_id);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    // Register master as an agent for the sub's derived user_id — same
+    // pattern as vaults. Master signs orders with `user = sub_user_id`
+    // and the existing agent path passes verification.
+    state.agents.register(crate::agents::AgentDelegation {
+        master: sub_user_id.clone(),
+        agent: master.clone(),
+        expires_at_ms: now_ms + 10 * 365 * 24 * 60 * 60 * 1_000,
+        max_notional_per_order: u64::MAX,
+        revoked: false,
+        nonce: body.nonce,
+    });
+
+    let sub = crate::subaccounts::SubAccount {
+        master: body.master.to_lowercase(),
+        subaccount_id: body.subaccount_id,
+        name: body.name,
+        user_id: sub_user_id.clone(),
+        created_at_ms: now_ms,
+    };
+    state.subaccounts.subs.insert(key, sub.clone());
+
+    (StatusCode::OK, Json(ApiResponse::ok(sub))).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct TransferSubaccountBody {
+    master: String,
+    subaccount_id: u32,
+    /// USDC × 1e6 to move. Positive = master → sub. Negative = sub → master.
+    amount_micro: i64,
+    nonce: u64,
+    /// Signature by master over
+    /// `vela:subaccount:transfer:{subaccount_id}:{amount_micro}:{nonce}`.
+    signature: String,
+}
+
+async fn transfer_subaccount(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<TransferSubaccountBody>,
+) -> impl IntoResponse {
+    let master = match UserId::from_hex(&body.master) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid master address")),
+            )
+                .into_response()
+        }
+    };
+    let msg = format!(
+        "vela:subaccount:transfer:{}:{}:{}",
+        body.subaccount_id, body.amount_micro, body.nonce
+    );
+    if crate::auth::verify_matches_async(
+        msg.into_bytes(),
+        body.signature.clone(),
+        body.master.clone(),
+    )
+    .await
+    .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err(
+                "master signature did not match payload",
+            )),
+        )
+            .into_response();
+    }
+
+    let sub_user_id = crate::subaccounts::derive_sub_user_id(&master, body.subaccount_id);
+    let key = (body.master.to_lowercase(), body.subaccount_id);
+    if !state.subaccounts.subs.contains_key(&key) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()>::err(
+                "subaccount does not exist — create it first",
+            )),
+        )
+            .into_response();
+    }
+
+    if body.amount_micro == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("amount_micro must be non-zero")),
+        )
+            .into_response();
+    }
+
+    let (from_id, to_id, amount) = if body.amount_micro > 0 {
+        (
+            master.clone(),
+            sub_user_id.clone(),
+            body.amount_micro as u64,
+        )
+    } else {
+        (
+            sub_user_id.clone(),
+            master.clone(),
+            (-body.amount_micro) as u64,
+        )
+    };
+
+    let mut us = state.shards.user_state.write().await;
+    let from_key = (from_id.clone(), types::AssetId::from_str("USDC"));
+    let to_key = (to_id.clone(), types::AssetId::from_str("USDC"));
+
+    let from_bal = us
+        .balances
+        .entry(from_key)
+        .or_insert_with(|| types::Balance {
+            user: from_id.clone(),
+            asset: types::AssetId::from_str("USDC"),
+            available: 0,
+            locked: 0,
+        });
+    if from_bal.available < amount {
+        return (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(ApiResponse::<()>::err(format!(
+                "source needs {} USDC micro available; has {}",
+                amount, from_bal.available
+            ))),
+        )
+            .into_response();
+    }
+    from_bal.available -= amount;
+
+    let to_bal = us.balances.entry(to_key).or_insert_with(|| types::Balance {
+        user: to_id.clone(),
+        asset: types::AssetId::from_str("USDC"),
+        available: 0,
+        locked: 0,
+    });
+    to_bal.available += amount;
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "master": body.master.to_lowercase(),
+            "subaccount_id": body.subaccount_id,
+            "amount_micro": body.amount_micro,
+            "direction": if body.amount_micro > 0 { "master_to_sub" } else { "sub_to_master" },
+        }))),
+    )
+        .into_response()
+}
+
+async fn list_subaccounts(
+    Path(master): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let subs = state.subaccounts.list_for(&master);
+    let us = state.shards.user_state.read().await;
+    let with_balances: Vec<serde_json::Value> = subs
+        .into_iter()
+        .map(|s| {
+            let usdc_bal = us
+                .balances
+                .get(&(s.user_id.clone(), types::AssetId::from_str("USDC")))
+                .map(|b| (b.available, b.locked))
+                .unwrap_or((0, 0));
+            serde_json::json!({
+                "subaccount_id": s.subaccount_id,
+                "name": s.name,
+                "user_id": format!("0x{}", hex::encode(s.user_id.0)),
+                "usdc_available_micro": usdc_bal.0,
+                "usdc_locked_micro": usdc_bal.1,
+                "created_at_ms": s.created_at_ms,
+            })
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "master": master.to_lowercase(),
+            "subaccounts": with_balances,
         }))),
     )
         .into_response()

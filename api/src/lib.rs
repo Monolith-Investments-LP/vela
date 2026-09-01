@@ -17,6 +17,7 @@ pub mod openapi;
 pub mod pyth;
 pub mod rate_limit;
 pub mod snapshot;
+pub mod subaccounts;
 pub mod toxicity_feed;
 pub mod types;
 pub mod vaults;
@@ -103,6 +104,9 @@ pub struct AppState {
     pub listings: crate::listings::ListingRegistry,
     /// MM credit vaults + per-LP share positions.
     pub vaults: Arc<crate::vaults::VaultRegistry>,
+    /// Per-master sub-accounts (v1 MVP; full composite-key refactor
+    /// tracked separately).
+    pub subaccounts: Arc<crate::subaccounts::SubaccountRegistry>,
     /// Admin bearer token — read from ADMIN_TOKEN at boot and used in
     /// constant-time comparisons via `AppState::verify_admin_token`.
     admin_token: String,
@@ -270,6 +274,7 @@ impl AppState {
             algos: std::sync::Arc::new(dashmap::DashMap::new()),
             listings: std::sync::Arc::new(dashmap::DashMap::new()),
             vaults: crate::vaults::VaultRegistry::new(),
+            subaccounts: crate::subaccounts::SubaccountRegistry::new(),
             admin_token,
         });
 
