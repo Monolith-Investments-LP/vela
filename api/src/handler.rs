@@ -276,6 +276,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/agents/reasoning/attest",
             post(crate::reasoning_attest::attest_handler),
         )
+        .route(
+            "/reputation/attest/:address",
+            post(crate::reputation::attest_handler),
+        )
+        .route("/reputation/:address", get(crate::reputation::get_handler))
         .route("/orders/algo/twap", post(post_twap_algo))
         .route("/orders/algo/cancel", post(cancel_algo))
         .route("/orders/algo/:parent_id", get(get_algo_status))

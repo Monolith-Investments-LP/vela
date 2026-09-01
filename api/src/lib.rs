@@ -21,6 +21,7 @@ pub mod prompt_firewall;
 pub mod pyth;
 pub mod rate_limit;
 pub mod reasoning_attest;
+pub mod reputation;
 pub mod rfq;
 pub mod snapshot;
 pub mod subaccounts;
@@ -120,6 +121,12 @@ pub struct AppState {
     /// `address_lowercase` → `cleared_until_ms`. While `now < value`,
     /// the address is treated as green regardless of raw score.
     pub agent_tier_clears: Arc<dashmap::DashMap<String, u64>>,
+    /// Cached reputation attestations keyed by lowercase address. Written
+    /// on `POST /reputation/attest/:address`, read on
+    /// `GET /reputation/:address`. Not persisted; a restart forces
+    /// re-issuance, which is intentional (stale scores shouldn't outlive
+    /// process state).
+    pub reputation_cache: Arc<dashmap::DashMap<String, crate::reputation::ReputationScore>>,
     /// Admin bearer token — read from ADMIN_TOKEN at boot and used in
     /// constant-time comparisons via `AppState::verify_admin_token`.
     admin_token: String,
@@ -290,6 +297,7 @@ impl AppState {
             subaccounts: crate::subaccounts::SubaccountRegistry::new(),
             rfq: crate::rfq::RfqRegistry::new(),
             agent_tier_clears: std::sync::Arc::new(dashmap::DashMap::new()),
+            reputation_cache: std::sync::Arc::new(dashmap::DashMap::new()),
             admin_token,
         });
 
