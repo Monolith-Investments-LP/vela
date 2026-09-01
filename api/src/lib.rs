@@ -17,6 +17,7 @@ pub mod listings;
 pub mod mcp;
 pub mod mm;
 pub mod openapi;
+pub mod prompt_firewall;
 pub mod pyth;
 pub mod rate_limit;
 pub mod reasoning_attest;

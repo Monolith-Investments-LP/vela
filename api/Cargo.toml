@@ -40,6 +40,8 @@ rmp-serde = "1"
 subtle = "2"
 mimalloc = { version = "0.1", default-features = false }
 flate2 = "1"
+regex = "1"
+once_cell = "1"
 
 [dev-dependencies]
 axum-test = { version = "15", features = ["ws"] }
