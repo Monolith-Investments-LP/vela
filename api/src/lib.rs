@@ -25,6 +25,7 @@ pub mod reasoning_attest;
 pub mod reputation;
 pub mod rfq;
 pub mod snapshot;
+pub mod strategies;
 pub mod subaccounts;
 pub mod toxicity_feed;
 pub mod types;
@@ -132,6 +133,10 @@ pub struct AppState {
     /// lowercase address; at most one live line per address in v1.
     /// Expiry sweep runs every 10 s via `credit::run_expiry_task`.
     pub credit_lines: crate::credit::CreditRegistry,
+    /// Published copy-trading strategies + their follower
+    /// subscriptions. Owner signs to publish, follower signs to
+    /// subscribe; funds never leave follower custody.
+    pub strategies: Arc<crate::strategies::StrategyRegistry>,
     /// Admin bearer token — read from ADMIN_TOKEN at boot and used in
     /// constant-time comparisons via `AppState::verify_admin_token`.
     admin_token: String,
@@ -304,6 +309,7 @@ impl AppState {
             agent_tier_clears: std::sync::Arc::new(dashmap::DashMap::new()),
             reputation_cache: std::sync::Arc::new(dashmap::DashMap::new()),
             credit_lines: crate::credit::new_registry(),
+            strategies: crate::strategies::StrategyRegistry::new(),
             admin_token,
         });
 

@@ -284,6 +284,27 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/credit/open", post(crate::credit::open_handler))
         .route("/credit/close", post(crate::credit::close_handler))
         .route("/credit/:address", get(crate::credit::get_handler))
+        .route(
+            "/strategies/publish",
+            post(crate::strategies::publish_handler),
+        )
+        .route("/strategies", get(crate::strategies::list_handler))
+        .route(
+            "/strategies/:strategy_id",
+            get(crate::strategies::get_handler),
+        )
+        .route(
+            "/strategies/:strategy_id/subscribe",
+            post(crate::strategies::subscribe_handler),
+        )
+        .route(
+            "/strategies/:strategy_id/unsub",
+            post(crate::strategies::unsubscribe_handler),
+        )
+        .route(
+            "/strategies/:strategy_id/subscriptions",
+            get(crate::strategies::list_subscriptions_handler),
+        )
         .route("/orders/algo/twap", post(post_twap_algo))
         .route("/orders/algo/cancel", post(cancel_algo))
         .route("/orders/algo/:parent_id", get(get_algo_status))
