@@ -277,6 +277,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/subaccounts/create", post(create_subaccount))
         .route("/subaccounts/transfer", post(transfer_subaccount))
         .route("/subaccounts/:master", get(list_subaccounts))
+        .route("/rfq/request", post(rfq_request))
+        .route("/rfq/quote", post(rfq_quote))
+        .route("/rfq/accept", post(rfq_accept))
+        .route("/rfq/requests", get(list_rfq_requests))
+        .route("/rfq/quotes/:rfq_id", get(list_rfq_quotes))
         .route("/anchors", get(get_anchors))
         .route("/incidents", get(get_incidents))
         .route("/admin/incidents", post(create_incident))
@@ -3635,6 +3640,498 @@ async fn get_points_handler(
                 "referral_multiplier": POINTS_REFERRAL_MULTIPLIER,
                 "taker_penalty": "notional * (1 - toxicity_score); fills with score > 0.5 are counted as toxic",
             },
+        }))),
+    )
+        .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// RFQ / block-trade venue.
+//
+// Ships the primitive so it's ready when MM depth is sufficient.
+// Deliberately off-book so a $2M taker doesn't leak to the trade tape
+// via CLOB slippage. Requester signs a request → whitelisted MMs post
+// signed quotes → requester accepts → Vela settles atomically.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct RfqRequestBody {
+    requester: String,
+    market: String,
+    side: types::OrderSide,
+    quantity: u64,
+    /// Wall-clock ms after which the request stops accepting quotes.
+    expires_at_ms: u64,
+    nonce: u64,
+    /// Signature over `vela:rfq:request:{market}:{side}:{quantity}:{expires_at_ms}:{nonce}`.
+    signature: String,
+}
+
+fn rfq_request_signing_message(
+    market: &str,
+    side: types::OrderSide,
+    quantity: u64,
+    expires_at_ms: u64,
+    nonce: u64,
+) -> Vec<u8> {
+    format!(
+        "vela:rfq:request:{}:{:?}:{}:{}:{}",
+        market, side, quantity, expires_at_ms, nonce
+    )
+    .into_bytes()
+}
+
+async fn rfq_request(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<RfqRequestBody>,
+) -> impl IntoResponse {
+    let requester = match UserId::from_hex(&body.requester) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid requester address")),
+            )
+                .into_response()
+        }
+    };
+    let _ = requester;
+    let msg = rfq_request_signing_message(
+        &body.market,
+        body.side,
+        body.quantity,
+        body.expires_at_ms,
+        body.nonce,
+    );
+    if crate::auth::verify_matches_async(msg, body.signature.clone(), body.requester.clone())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err(
+                "requester signature did not match payload",
+            )),
+        )
+            .into_response();
+    }
+    if body.quantity == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("quantity must be > 0")),
+        )
+            .into_response();
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    if body.expires_at_ms <= now_ms {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err(
+                "expires_at_ms must be in the future",
+            )),
+        )
+            .into_response();
+    }
+
+    let rfq_id = crate::rfq::next_rfq_id();
+    let request = crate::rfq::RfqRequest {
+        rfq_id,
+        requester: body.requester.to_lowercase(),
+        market: body.market,
+        side: body.side,
+        quantity: body.quantity,
+        expires_at_ms: body.expires_at_ms,
+        created_at_ms: now_ms,
+        status: crate::rfq::RfqStatus::Open,
+        filled_by_quote_id: None,
+    };
+    state.rfq.requests.insert(rfq_id, request.clone());
+
+    (StatusCode::OK, Json(ApiResponse::ok(request))).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct RfqQuoteBody {
+    rfq_id: u64,
+    maker: String,
+    price: u64,
+    quantity: u64,
+    expires_at_ms: u64,
+    nonce: u64,
+    /// Signature over `vela:rfq:quote:{rfq_id}:{price}:{quantity}:{expires_at_ms}:{nonce}`.
+    signature: String,
+}
+
+fn rfq_quote_signing_message(
+    rfq_id: u64,
+    price: u64,
+    quantity: u64,
+    expires_at_ms: u64,
+    nonce: u64,
+) -> Vec<u8> {
+    format!(
+        "vela:rfq:quote:{}:{}:{}:{}:{}",
+        rfq_id, price, quantity, expires_at_ms, nonce
+    )
+    .into_bytes()
+}
+
+async fn rfq_quote(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<RfqQuoteBody>,
+) -> impl IntoResponse {
+    // Check MM allowlist.
+    let allow = crate::rfq::maker_allowlist();
+    if !allow.contains(&body.maker.to_lowercase()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()>::err(
+                "maker not in RFQ allowlist (see VELA_RFQ_MAKERS)",
+            )),
+        )
+            .into_response();
+    }
+
+    // Fetch the request to validate against.
+    let req = match state.rfq.requests.get(&body.rfq_id) {
+        Some(r) => r.value().clone(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::<()>::err("rfq_id not found")),
+            )
+                .into_response()
+        }
+    };
+    if !matches!(req.status, crate::rfq::RfqStatus::Open) {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::<()>::err("rfq is not open")),
+        )
+            .into_response();
+    }
+    if body.quantity != req.quantity {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err(
+                "quote quantity must equal RFQ quantity (partials are v2)",
+            )),
+        )
+            .into_response();
+    }
+
+    let msg = rfq_quote_signing_message(
+        body.rfq_id,
+        body.price,
+        body.quantity,
+        body.expires_at_ms,
+        body.nonce,
+    );
+    if crate::auth::verify_matches_async(msg, body.signature.clone(), body.maker.clone())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err(
+                "maker signature did not match payload",
+            )),
+        )
+            .into_response();
+    }
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let quote_id = crate::rfq::next_quote_id();
+    let quote = crate::rfq::RfqQuote {
+        quote_id,
+        rfq_id: body.rfq_id,
+        maker: body.maker.to_lowercase(),
+        price: body.price,
+        quantity: body.quantity,
+        expires_at_ms: body.expires_at_ms,
+        created_at_ms: now_ms,
+    };
+    state
+        .rfq
+        .quotes
+        .insert((body.rfq_id, quote_id), quote.clone());
+
+    (StatusCode::OK, Json(ApiResponse::ok(quote))).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct RfqAcceptBody {
+    rfq_id: u64,
+    quote_id: u64,
+    requester: String,
+    nonce: u64,
+    /// Signature over `vela:rfq:accept:{rfq_id}:{quote_id}:{nonce}`.
+    signature: String,
+}
+
+async fn rfq_accept(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<RfqAcceptBody>,
+) -> impl IntoResponse {
+    let request = match state.rfq.requests.get(&body.rfq_id) {
+        Some(r) => r.value().clone(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::<()>::err("rfq_id not found")),
+            )
+                .into_response()
+        }
+    };
+    if !matches!(request.status, crate::rfq::RfqStatus::Open) {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::<()>::err("rfq is not open")),
+        )
+            .into_response();
+    }
+    if request.requester != body.requester.to_lowercase() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()>::err("not the requester of this rfq")),
+        )
+            .into_response();
+    }
+    let msg = format!(
+        "vela:rfq:accept:{}:{}:{}",
+        body.rfq_id, body.quote_id, body.nonce
+    );
+    if crate::auth::verify_matches_async(
+        msg.into_bytes(),
+        body.signature.clone(),
+        body.requester.clone(),
+    )
+    .await
+    .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err(
+                "requester signature did not match payload",
+            )),
+        )
+            .into_response();
+    }
+
+    let quote = match state.rfq.quotes.get(&(body.rfq_id, body.quote_id)) {
+        Some(q) => q.value().clone(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::<()>::err("quote_id not found for rfq_id")),
+            )
+                .into_response()
+        }
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    if quote.expires_at_ms <= now_ms {
+        return (
+            StatusCode::GONE,
+            Json(ApiResponse::<()>::err("quote has expired")),
+        )
+            .into_response();
+    }
+
+    // Book-improvement gate: quote must be no worse than current touch.
+    {
+        let engine = state.engine.lock().await;
+        if let Some(book) = engine.order_books.get(&MarketId(request.market.clone())) {
+            let touch = match request.side {
+                types::OrderSide::Bid => book.best_ask(),
+                types::OrderSide::Ask => book.best_bid(),
+            };
+            if let Some(t) = touch {
+                let improves = match request.side {
+                    types::OrderSide::Bid => quote.price <= t,
+                    types::OrderSide::Ask => quote.price >= t,
+                };
+                if !improves {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(ApiResponse::<()>::err(format!(
+                            "quote price {} does not improve on public book touch {}",
+                            quote.price, t
+                        ))),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    }
+
+    // Atomic settlement. Bypass the CLOB matcher: both parties have
+    // already signed off on price + quantity. Move balances directly.
+    let requester_id = UserId::from_hex(&request.requester).unwrap();
+    let maker_id = UserId::from_hex(&quote.maker).unwrap();
+    let (base_str, quote_str) = match request.market.split_once('-') {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::err("malformed market_id")),
+            )
+                .into_response();
+        }
+    };
+    let base_asset = AssetId::from_str(base_str);
+    let quote_asset = AssetId::from_str(quote_str);
+
+    // Notional in USDC micro = price × quantity / 1_000_000.
+    let notional_micro = (quote.price as u128 * quote.quantity as u128 / 1_000_000u128) as u64;
+
+    // Direction: request.side is the requester's side. Bid = requester
+    // buys base, pays quote. Ask = requester sells base, receives quote.
+    let (buyer_id, seller_id) = match request.side {
+        types::OrderSide::Bid => (requester_id.clone(), maker_id.clone()),
+        types::OrderSide::Ask => (maker_id.clone(), requester_id.clone()),
+    };
+
+    {
+        let mut us = state.shards.user_state.write().await;
+
+        // Buyer needs `notional_micro` of quote; seller needs `quantity` of base.
+        let buyer_quote_key = (buyer_id.clone(), quote_asset);
+        let seller_base_key = (seller_id.clone(), base_asset);
+
+        let buyer_bal = us
+            .balances
+            .entry(buyer_quote_key)
+            .or_insert_with(|| types::Balance {
+                user: buyer_id.clone(),
+                asset: quote_asset,
+                available: 0,
+                locked: 0,
+            });
+        if buyer_bal.available < notional_micro {
+            return (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(ApiResponse::<()>::err(format!(
+                    "buyer needs {} quote micro; has {}",
+                    notional_micro, buyer_bal.available
+                ))),
+            )
+                .into_response();
+        }
+        buyer_bal.available -= notional_micro;
+
+        // Check seller balance without holding the entry borrow across
+        // the rollback path.
+        let seller_available = us
+            .balances
+            .get(&seller_base_key)
+            .map(|b| b.available)
+            .unwrap_or(0);
+        if seller_available < quote.quantity {
+            // Rollback the buyer's debit.
+            if let Some(b) = us.balances.get_mut(&(buyer_id.clone(), quote_asset)) {
+                b.available += notional_micro;
+            }
+            return (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(ApiResponse::<()>::err(format!(
+                    "seller needs {} base micro; has {}",
+                    quote.quantity, seller_available
+                ))),
+            )
+                .into_response();
+        }
+        let seller_bal = us
+            .balances
+            .entry(seller_base_key)
+            .or_insert_with(|| types::Balance {
+                user: seller_id.clone(),
+                asset: base_asset,
+                available: 0,
+                locked: 0,
+            });
+        seller_bal.available -= quote.quantity;
+
+        // Credit the other side.
+        us.balances
+            .entry((seller_id.clone(), quote_asset))
+            .or_insert_with(|| types::Balance {
+                user: seller_id.clone(),
+                asset: quote_asset,
+                available: 0,
+                locked: 0,
+            })
+            .available += notional_micro;
+        us.balances
+            .entry((buyer_id.clone(), base_asset))
+            .or_insert_with(|| types::Balance {
+                user: buyer_id.clone(),
+                asset: base_asset,
+                available: 0,
+                locked: 0,
+            })
+            .available += quote.quantity;
+    }
+
+    // Flip request status.
+    if let Some(mut r) = state.rfq.requests.get_mut(&body.rfq_id) {
+        r.status = crate::rfq::RfqStatus::Filled;
+        r.filled_by_quote_id = Some(body.quote_id);
+    }
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "rfq_id": body.rfq_id,
+            "quote_id": body.quote_id,
+            "market": request.market,
+            "buyer": format!("0x{}", hex::encode(buyer_id.0)),
+            "seller": format!("0x{}", hex::encode(seller_id.0)),
+            "price": quote.price,
+            "quantity": quote.quantity,
+            "notional_micro": notional_micro,
+        }))),
+    )
+        .into_response()
+}
+
+async fn list_rfq_requests(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut all: Vec<crate::rfq::RfqRequest> = state
+        .rfq
+        .requests
+        .iter()
+        .map(|e| e.value().clone())
+        .collect();
+    all.sort_by_key(|r| std::cmp::Reverse(r.created_at_ms));
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "requests": all,
+            "min_notional_micro": crate::rfq::min_notional_micro(),
+            "maker_allowlist_size": crate::rfq::maker_allowlist().len(),
+        }))),
+    )
+        .into_response()
+}
+
+async fn list_rfq_quotes(
+    Path(rfq_id): Path<u64>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let quotes = state.rfq.quotes_for(rfq_id);
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "rfq_id": rfq_id,
+            "quotes": quotes,
         }))),
     )
         .into_response()

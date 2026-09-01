@@ -16,6 +16,7 @@ pub mod mm;
 pub mod openapi;
 pub mod pyth;
 pub mod rate_limit;
+pub mod rfq;
 pub mod snapshot;
 pub mod subaccounts;
 pub mod toxicity_feed;
@@ -107,6 +108,8 @@ pub struct AppState {
     /// Per-master sub-accounts (v1 MVP; full composite-key refactor
     /// tracked separately).
     pub subaccounts: Arc<crate::subaccounts::SubaccountRegistry>,
+    /// Off-book RFQ / block-trade venue state.
+    pub rfq: Arc<crate::rfq::RfqRegistry>,
     /// Admin bearer token — read from ADMIN_TOKEN at boot and used in
     /// constant-time comparisons via `AppState::verify_admin_token`.
     admin_token: String,
@@ -275,6 +278,7 @@ impl AppState {
             listings: std::sync::Arc::new(dashmap::DashMap::new()),
             vaults: crate::vaults::VaultRegistry::new(),
             subaccounts: crate::subaccounts::SubaccountRegistry::new(),
+            rfq: crate::rfq::RfqRegistry::new(),
             admin_token,
         });
 
