@@ -9,6 +9,7 @@ pub mod algos;
 pub mod anchor;
 pub mod auth;
 pub mod backtest_attest;
+pub mod borrow_lend;
 pub mod committee_handler;
 pub mod credit;
 pub mod da;
@@ -138,6 +139,10 @@ pub struct AppState {
     /// subscriptions. Owner signs to publish, follower signs to
     /// subscribe; funds never leave follower custody.
     pub strategies: Arc<crate::strategies::StrategyRegistry>,
+    /// Spot borrow-lend money market (Tier 4.6). Per-asset index
+    /// accrual + per-user supply/borrow positions with health-factor
+    /// gating.
+    pub borrow_lend: Arc<crate::borrow_lend::BorrowLendRegistry>,
     /// Admin bearer token — read from ADMIN_TOKEN at boot and used in
     /// constant-time comparisons via `AppState::verify_admin_token`.
     admin_token: String,
@@ -311,6 +316,11 @@ impl AppState {
             reputation_cache: std::sync::Arc::new(dashmap::DashMap::new()),
             credit_lines: crate::credit::new_registry(),
             strategies: crate::strategies::StrategyRegistry::new(),
+            borrow_lend: {
+                let r = crate::borrow_lend::BorrowLendRegistry::new();
+                r.seed_defaults();
+                r
+            },
             admin_token,
         });
 

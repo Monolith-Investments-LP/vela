@@ -309,6 +309,34 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/strategies/backtest/attest",
             post(crate::backtest_attest::attest_handler),
         )
+        .route(
+            "/borrow-lend/markets",
+            get(crate::borrow_lend::markets_handler),
+        )
+        .route(
+            "/borrow-lend/account/:address",
+            get(crate::borrow_lend::account_handler),
+        )
+        .route(
+            "/borrow-lend/supply",
+            post(crate::borrow_lend::supply_handler),
+        )
+        .route(
+            "/borrow-lend/withdraw",
+            post(crate::borrow_lend::withdraw_handler),
+        )
+        .route(
+            "/borrow-lend/borrow",
+            post(crate::borrow_lend::borrow_handler),
+        )
+        .route(
+            "/borrow-lend/repay",
+            post(crate::borrow_lend::repay_handler),
+        )
+        .route(
+            "/borrow-lend/liquidate",
+            post(crate::borrow_lend::liquidate_handler),
+        )
         .route("/orders/algo/twap", post(post_twap_algo))
         .route("/orders/algo/cancel", post(cancel_algo))
         .route("/orders/algo/:parent_id", get(get_algo_status))
