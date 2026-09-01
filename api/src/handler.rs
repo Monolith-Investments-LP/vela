@@ -757,20 +757,25 @@ async fn post_order(
         .unwrap_or_default()
         .as_millis() as u64;
 
-    if crate::agents::verify_master_or_agent_async(
+    if crate::agents::verify_master_or_agent_scoped_async(
         msg,
         body.signature.clone(),
         body.address.clone(),
         order_notional_micro,
         now_ms,
         Arc::clone(&state.agents),
+        MarketId(body.market.clone()),
+        body.side,
+        body.order_type,
     )
     .await
     .is_err()
     {
         return (
             StatusCode::UNAUTHORIZED,
-            Json(ApiResponse::<()>::err("invalid signature")),
+            Json(ApiResponse::<()>::err(
+                "invalid signature or capability scope violated",
+            )),
         )
             .into_response();
     }
@@ -4216,6 +4221,7 @@ async fn create_subaccount(
         max_notional_per_order: u64::MAX,
         revoked: false,
         nonce: body.nonce,
+        scope: crate::agents::CapabilityScope::default(),
     });
 
     let sub = crate::subaccounts::SubAccount {
@@ -4478,6 +4484,7 @@ async fn create_vault(
         max_notional_per_order: u64::MAX,
         revoked: false,
         nonce: body.nonce,
+        scope: crate::agents::CapabilityScope::default(),
     });
 
     // Set the vault's credit ratio in the credit system.
@@ -5490,8 +5497,13 @@ struct AgentRegisterBody {
     /// Registration nonce (dedupes replays of the same signed message).
     nonce: u64,
     /// 65-byte ECDSA signature by `master` over
-    /// `vela:agent:register:0x{agent}:{expires_at_ms}:{max_notional}:{nonce}`.
+    /// `vela:agent:register:0x{agent}:{expires_at_ms}:{max_notional}:{nonce}:{scope_hash}`.
     signature: String,
+    /// Optional capability grammar: allow-listed markets, order types,
+    /// sides, and rolling notional caps. Omit for a permissive (v1-style)
+    /// delegation that only enforces `max_notional_per_order` + expiry.
+    #[serde(default)]
+    scope: Option<crate::agents::CapabilityScope>,
 }
 
 async fn agents_register(
@@ -5519,11 +5531,13 @@ async fn agents_register(
         }
     };
 
+    let scope = body.scope.clone().unwrap_or_default();
     let msg = crate::agents::delegation_signing_message(
         &agent_id,
         body.expires_at_ms,
         body.max_notional_per_order,
         body.nonce,
+        &scope,
     );
     if crate::auth::verify_matches_async(msg, body.signature.clone(), body.master.clone())
         .await
@@ -5566,6 +5580,7 @@ async fn agents_register(
         max_notional_per_order: body.max_notional_per_order,
         revoked: false,
         nonce: body.nonce,
+        scope,
     });
 
     (
