@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 types = { workspace = true }
 engine = { workspace = true }
+perp = { path = "../perp" }
 zkvm = { path = "../zkvm" }
 tee = { path = "../tee" }
 committee = { path = "../committee" }

@@ -345,6 +345,19 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/portfolio-margin/preview/:address",
             post(crate::portfolio_margin::preview_handler),
         )
+        .route("/perp/markets", get(crate::perp_service::markets_handler))
+        .route(
+            "/perp/account/:address",
+            get(crate::perp_service::account_handler),
+        )
+        .route(
+            "/perp/positions/open",
+            post(crate::perp_service::open_handler),
+        )
+        .route(
+            "/perp/admin/mark",
+            post(crate::perp_service::admin_mark_handler),
+        )
         .route("/orders/algo/twap", post(post_twap_algo))
         .route("/orders/algo/cancel", post(cancel_algo))
         .route("/orders/algo/:parent_id", get(get_algo_status))

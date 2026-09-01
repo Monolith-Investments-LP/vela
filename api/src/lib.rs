@@ -20,6 +20,7 @@ pub mod listings;
 pub mod mcp;
 pub mod mm;
 pub mod openapi;
+pub mod perp_service;
 pub mod portfolio_margin;
 pub mod prompt_firewall;
 pub mod pyth;
@@ -144,6 +145,10 @@ pub struct AppState {
     /// accrual + per-user supply/borrow positions with health-factor
     /// gating.
     pub borrow_lend: Arc<crate::borrow_lend::BorrowLendRegistry>,
+    /// Perp markets + positions (Tier 4.1). Matching-engine wiring
+    /// is a follow-up; this registry owns position ledger + funding
+    /// accrual only.
+    pub perp: Arc<crate::perp_service::PerpRegistry>,
     /// Admin bearer token — read from ADMIN_TOKEN at boot and used in
     /// constant-time comparisons via `AppState::verify_admin_token`.
     admin_token: String,
@@ -319,6 +324,11 @@ impl AppState {
             strategies: crate::strategies::StrategyRegistry::new(),
             borrow_lend: {
                 let r = crate::borrow_lend::BorrowLendRegistry::new();
+                r.seed_defaults();
+                r
+            },
+            perp: {
+                let r = crate::perp_service::PerpRegistry::new();
                 r.seed_defaults();
                 r
             },

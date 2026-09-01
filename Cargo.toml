@@ -9,6 +9,7 @@ members = [
     "tee",
     "benches",
     "committee",
+    "perp",
 ]
 resolver = "2"
 
