@@ -216,6 +216,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/agent-stream/schema.json",
             get(crate::agent_schema::schema_handler),
         )
+        .route("/agents/:master/tier", get(agent_tier_handler))
+        .route("/admin/agent-tier/clear", post(admin_clear_agent_tier))
         .route("/status", get(status_handler))
         .route("/fees/public", get(fees_public_handler))
         .route("/fees/schedule", get(fees_schedule_handler))
@@ -828,8 +830,25 @@ async fn post_order(
         }
     };
 
+    // Agent-flow toxicity tier gate.
+    // Red tier blocks new orders until the operator manually clears.
+    // Amber adds an extra deterministic bump on top of the IEX-style
+    // speed bump. Green flows unrestricted.
+    let addr_lower = body.address.to_ascii_lowercase();
+    if crate::agent_tox::should_block(&state, &addr_lower).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()>::err(
+                "toxicity tier: RED — orders blocked pending operator review. Contact support.",
+            )),
+        )
+            .into_response();
+    }
+    let tier_extra_bump = crate::agent_tox::extra_bump_for(&state, &addr_lower).await;
+
     // IEX-style speed bump: delay only crossing orders, not resting ones.
-    let bump = speed_bump_duration();
+    // Amber-tier addresses eat the base bump plus an extra amber delay.
+    let bump = speed_bump_duration() + tier_extra_bump;
     if is_marketable && !bump.is_zero() {
         tokio::time::sleep(bump).await;
     }
@@ -5689,6 +5708,86 @@ async fn agents_list(
         Json(ApiResponse::ok(serde_json::json!({
             "master": master.to_lowercase(),
             "agents": agents,
+        }))),
+    )
+        .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Agent-flow toxicity tier (Tier 3.5).
+// ---------------------------------------------------------------------------
+
+async fn agent_tier_handler(
+    Path(master): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let addr = master.to_ascii_lowercase();
+    let tc = crate::agent_tox::compute_tier(&state, &addr).await;
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "address": addr,
+            "tier": tc.tier.as_str(),
+            "avg_toxicity_30d": format!("{:.4}", tc.avg_toxicity),
+            "taker_fill_count_30d": tc.taker_fill_count,
+            "amber_threshold": crate::agent_tox::amber_threshold(),
+            "red_threshold": crate::agent_tox::red_threshold(),
+            "cleared_until_ms": tc.cleared_until_ms,
+        }))),
+    )
+        .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct ClearAgentTierBody {
+    address: String,
+    /// Unix ms until which the address is treated as green regardless
+    /// of raw toxicity score. Default: 7 days from now if omitted.
+    #[serde(default)]
+    cleared_until_ms: Option<u64>,
+    /// Free-text reason for the audit log.
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+async fn admin_clear_agent_tier(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ClearAgentTierBody>,
+) -> impl IntoResponse {
+    let provided = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !state.verify_admin_token(provided) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("unauthorized")),
+        )
+            .into_response();
+    }
+    let addr = body.address.to_ascii_lowercase();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let default_until = now_ms + 7 * 24 * 60 * 60 * 1_000;
+    let until = body.cleared_until_ms.unwrap_or(default_until);
+    state.agent_tier_clears.insert(addr.clone(), until);
+
+    tracing::info!(
+        "agent tier cleared: addr={} until_ms={} reason={:?}",
+        addr,
+        until,
+        body.reason
+    );
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "address": addr,
+            "cleared_until_ms": until,
+            "reason": body.reason,
         }))),
     )
         .into_response()

@@ -3,6 +3,7 @@
 #![recursion_limit = "512"]
 
 pub mod agent_schema;
+pub mod agent_tox;
 pub mod agents;
 pub mod algos;
 pub mod anchor;
@@ -112,6 +113,10 @@ pub struct AppState {
     pub subaccounts: Arc<crate::subaccounts::SubaccountRegistry>,
     /// Off-book RFQ / block-trade venue state.
     pub rfq: Arc<crate::rfq::RfqRegistry>,
+    /// Operator-cleared addresses for the toxicity-tier gate:
+    /// `address_lowercase` → `cleared_until_ms`. While `now < value`,
+    /// the address is treated as green regardless of raw score.
+    pub agent_tier_clears: Arc<dashmap::DashMap<String, u64>>,
     /// Admin bearer token — read from ADMIN_TOKEN at boot and used in
     /// constant-time comparisons via `AppState::verify_admin_token`.
     admin_token: String,
@@ -281,6 +286,7 @@ impl AppState {
             vaults: crate::vaults::VaultRegistry::new(),
             subaccounts: crate::subaccounts::SubaccountRegistry::new(),
             rfq: crate::rfq::RfqRegistry::new(),
+            agent_tier_clears: std::sync::Arc::new(dashmap::DashMap::new()),
             admin_token,
         });
 
