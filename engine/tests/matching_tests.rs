@@ -62,6 +62,7 @@ fn post_bid(user: UserId, price: u64, qty: u64, nonce: u64) -> Request {
         signature: vec![0u8; 65],
         stp: Default::default(),
         min_quantity: None,
+        display_quantity: None,
     })
 }
 
@@ -78,6 +79,7 @@ fn post_ask(user: UserId, price: u64, qty: u64, nonce: u64) -> Request {
         signature: vec![0u8; 65],
         stp: Default::default(),
         min_quantity: None,
+        display_quantity: None,
     })
 }
 
@@ -94,6 +96,7 @@ fn post_ioc_bid(user: UserId, price: u64, qty: u64, nonce: u64) -> Request {
         signature: vec![0u8; 65],
         stp: Default::default(),
         min_quantity: None,
+        display_quantity: None,
     })
 }
 
@@ -110,6 +113,7 @@ fn post_fok_bid(user: UserId, price: u64, qty: u64, nonce: u64) -> Request {
         signature: vec![0u8; 65],
         stp: Default::default(),
         min_quantity: None,
+        display_quantity: None,
     })
 }
 
@@ -604,6 +608,7 @@ fn test_fill_triggers_auto_cancel_when_ratio_breached() {
             signature: vec![0u8; 65],
             stp: Default::default(),
             min_quantity: None,
+            display_quantity: None,
         }),
         5,
     );
@@ -698,6 +703,7 @@ fn test_asset_backing_invariant_holds() {
             signature: vec![0u8; 65],
             stp: Default::default(),
             min_quantity: None,
+            display_quantity: None,
         }),
         5,
     );
@@ -1205,6 +1211,7 @@ fn post_bid_with_coid(
         signature: vec![0u8; 65],
         stp: Default::default(),
         min_quantity: None,
+        display_quantity: None,
     })
 }
 
@@ -1395,6 +1402,7 @@ fn test_coid_fill_removes_mapping() {
             signature: vec![0u8; 65],
             stp: Default::default(),
             min_quantity: None,
+            display_quantity: None,
         }),
         3,
     );
@@ -1680,6 +1688,7 @@ fn test_credit_breach_auto_cancel_rolled_back_on_order_failure() {
             signature: vec![0u8; 65],
             stp: Default::default(),
             min_quantity: None,
+            display_quantity: None,
         }),
         3,
     );
@@ -2173,6 +2182,7 @@ fn post_bid_stp(
         signature: vec![0u8; 65],
         stp,
         min_quantity: None,
+        display_quantity: None,
     })
 }
 
@@ -2195,6 +2205,7 @@ fn post_ask_stp(
         signature: vec![0u8; 65],
         stp,
         min_quantity: None,
+        display_quantity: None,
     })
 }
 
@@ -2234,9 +2245,15 @@ fn test_stp_none_skips_self_match_silently() {
     e.process(deposit(u.clone(), btc(), 5 * QUANTITY_SCALE), 2);
 
     // Post own ask at 100.
-    e.process(post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None), 3);
+    e.process(
+        post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None),
+        3,
+    );
     // Try to lift own ask with a bid at 100. STP=None should silently skip.
-    let responses = e.process(post_bid_stp(u.clone(), 100, 1, 2, SelfTradePreventionMode::None), 4);
+    let responses = e.process(
+        post_bid_stp(u.clone(), 100, 1, 2, SelfTradePreventionMode::None),
+        4,
+    );
 
     assert_eq!(count_fills(&responses), 0, "no fills against self");
     // The bid should rest since nothing else was on the book.
@@ -2252,7 +2269,10 @@ fn test_stp_cancel_taker_zeros_incoming() {
     e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
     e.process(deposit(u.clone(), btc(), 5 * QUANTITY_SCALE), 2);
 
-    e.process(post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None), 3);
+    e.process(
+        post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None),
+        3,
+    );
     let responses = e.process(
         post_bid_stp(u.clone(), 100, 1, 2, SelfTradePreventionMode::CancelTaker),
         4,
@@ -2272,7 +2292,10 @@ fn test_stp_cancel_maker_removes_resting() {
     e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
     e.process(deposit(u.clone(), btc(), 5 * QUANTITY_SCALE), 2);
 
-    e.process(post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None), 3);
+    e.process(
+        post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None),
+        3,
+    );
     let responses = e.process(
         post_bid_stp(u.clone(), 100, 1, 2, SelfTradePreventionMode::CancelMaker),
         4,
@@ -2292,7 +2315,10 @@ fn test_stp_cancel_both() {
     e.process(deposit(u.clone(), usdc(), 100_000 * PRICE_SCALE), 1);
     e.process(deposit(u.clone(), btc(), 5 * QUANTITY_SCALE), 2);
 
-    e.process(post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None), 3);
+    e.process(
+        post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None),
+        3,
+    );
     let responses = e.process(
         post_bid_stp(u.clone(), 100, 1, 2, SelfTradePreventionMode::CancelBoth),
         4,
@@ -2313,11 +2339,20 @@ fn test_stp_decrement_and_cancel_taker_larger() {
     e.process(deposit(u.clone(), btc(), 5 * QUANTITY_SCALE), 2);
 
     // Maker asks 1 BTC @ 100.
-    e.process(post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None), 3);
+    e.process(
+        post_ask_stp(u.clone(), 100, 1, 1, SelfTradePreventionMode::None),
+        3,
+    );
     // Taker bids 3 BTC @ 100. Should cancel maker, taker rests with 2 BTC
     // remaining (no other counterparty).
     let responses = e.process(
-        post_bid_stp(u.clone(), 100, 3, 2, SelfTradePreventionMode::DecrementAndCancel),
+        post_bid_stp(
+            u.clone(),
+            100,
+            3,
+            2,
+            SelfTradePreventionMode::DecrementAndCancel,
+        ),
         4,
     );
 
@@ -2336,10 +2371,19 @@ fn test_stp_decrement_and_cancel_taker_smaller_cancels_both() {
     e.process(deposit(u.clone(), btc(), 5 * QUANTITY_SCALE), 2);
 
     // Maker asks 3 BTC @ 100.
-    e.process(post_ask_stp(u.clone(), 100, 3, 1, SelfTradePreventionMode::None), 3);
+    e.process(
+        post_ask_stp(u.clone(), 100, 3, 1, SelfTradePreventionMode::None),
+        3,
+    );
     // Taker bids 1 BTC. v1 policy: cancel both.
     let responses = e.process(
-        post_bid_stp(u.clone(), 100, 1, 2, SelfTradePreventionMode::DecrementAndCancel),
+        post_bid_stp(
+            u.clone(),
+            100,
+            1,
+            2,
+            SelfTradePreventionMode::DecrementAndCancel,
+        ),
         4,
     );
 
@@ -2357,13 +2401,20 @@ fn test_stp_does_not_affect_other_users() {
     e.process(deposit(maker.clone(), btc(), 5 * QUANTITY_SCALE), 1);
     e.process(deposit(taker.clone(), usdc(), 100_000 * PRICE_SCALE), 2);
 
-    e.process(post_ask_stp(maker, 100, 1, 1, SelfTradePreventionMode::None), 3);
+    e.process(
+        post_ask_stp(maker, 100, 1, 1, SelfTradePreventionMode::None),
+        3,
+    );
     let responses = e.process(
         post_bid_stp(taker, 100, 1, 1, SelfTradePreventionMode::CancelTaker),
         4,
     );
 
-    assert_eq!(count_fills(&responses), 1, "matches against other user still fill");
+    assert_eq!(
+        count_fills(&responses),
+        1,
+        "matches against other user still fill"
+    );
     assert_eq!(posted_status(&responses), Some(OrderStatus::Filled));
 }
 
@@ -2378,7 +2429,10 @@ fn test_min_quantity_rejects_under_threshold() {
     e.process(deposit(taker.clone(), usdc(), 1_000_000 * PRICE_SCALE), 2);
 
     // Only 1 BTC available at 100.
-    e.process(post_ask_stp(maker.clone(), 100, 1, 1, SelfTradePreventionMode::None), 3);
+    e.process(
+        post_ask_stp(maker.clone(), 100, 1, 1, SelfTradePreventionMode::None),
+        3,
+    );
 
     // Taker wants 5 BTC with min_quantity=3. Only 1 available → reject.
     let req = Request::PostOrder(PostOrderRequest {
@@ -2393,6 +2447,7 @@ fn test_min_quantity_rejects_under_threshold() {
         signature: vec![0u8; 65],
         stp: SelfTradePreventionMode::None,
         min_quantity: Some(3 * QUANTITY_SCALE),
+        display_quantity: None,
     });
 
     let responses = e.process(req, 4);
@@ -2408,7 +2463,10 @@ fn test_min_quantity_rejects_under_threshold() {
     assert_eq!(err, Some(ErrorCode::MinQuantityNotMet));
 
     // Atomicity: the maker's resting ask is still there (nothing was consumed).
-    e.process(post_ask_stp(maker.clone(), 101, 1, 2, SelfTradePreventionMode::None), 5);
+    e.process(
+        post_ask_stp(maker.clone(), 101, 1, 2, SelfTradePreventionMode::None),
+        5,
+    );
     // If the previous rejected order had partially filled, this cheap sanity check
     // (posting a second ask) would still work regardless. The stronger check is that
     // taker's USDC balance was not debited — checked via a second small IOC below.
@@ -2424,9 +2482,14 @@ fn test_min_quantity_rejects_under_threshold() {
         signature: vec![0u8; 65],
         stp: SelfTradePreventionMode::None,
         min_quantity: None,
+        display_quantity: None,
     });
     let r2 = e.process(req_small, 6);
-    assert_eq!(count_fills(&r2), 1, "taker balance was not debited by rejected order");
+    assert_eq!(
+        count_fills(&r2),
+        1,
+        "taker balance was not debited by rejected order"
+    );
 }
 
 /// min_quantity: order fills when threshold is met.
@@ -2439,7 +2502,10 @@ fn test_min_quantity_accepts_when_met() {
     e.process(deposit(maker.clone(), btc(), 5 * QUANTITY_SCALE), 1);
     e.process(deposit(taker.clone(), usdc(), 1_000_000 * PRICE_SCALE), 2);
 
-    e.process(post_ask_stp(maker.clone(), 100, 3, 1, SelfTradePreventionMode::None), 3);
+    e.process(
+        post_ask_stp(maker.clone(), 100, 3, 1, SelfTradePreventionMode::None),
+        3,
+    );
 
     // Taker wants 5 BTC with min_quantity=2. 3 available → accept, fills 3.
     let req = Request::PostOrder(PostOrderRequest {
@@ -2454,6 +2520,7 @@ fn test_min_quantity_accepts_when_met() {
         signature: vec![0u8; 65],
         stp: SelfTradePreventionMode::None,
         min_quantity: Some(2 * QUANTITY_SCALE),
+        display_quantity: None,
     });
     let responses = e.process(req, 4);
 
@@ -2470,4 +2537,231 @@ fn test_min_quantity_accepts_when_met() {
         })
         .sum();
     assert_eq!(filled_qty, 3 * QUANTITY_SCALE);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Iceberg order tests (Tier 1 buildplan).
+// ────────────────────────────────────────────────────────────────────────────
+
+fn post_iceberg_ask(user: UserId, price: u64, qty: u64, display: u64, nonce: u64) -> Request {
+    Request::PostOrder(PostOrderRequest {
+        user,
+        market: btc_usdc(),
+        side: OrderSide::Ask,
+        order_type: OrderType::GoodTillCanceled,
+        price: price * PRICE_SCALE,
+        quantity: qty * QUANTITY_SCALE,
+        nonce,
+        client_order_id: None,
+        signature: vec![0u8; 65],
+        stp: Default::default(),
+        min_quantity: None,
+        display_quantity: Some(display * QUANTITY_SCALE),
+    })
+}
+
+/// Iceberg: public depth shows only the display slice, not the full quantity.
+#[test]
+fn test_iceberg_hides_reserve_from_public_depth() {
+    let mut e = engine();
+    let maker = user(1);
+    e.process(deposit(maker.clone(), btc(), 100 * QUANTITY_SCALE), 1);
+
+    // Ask 10 BTC @ 100 but only display 2 BTC.
+    e.process(post_iceberg_ask(maker, 100, 10, 2, 1), 2);
+
+    let book = e.order_books.get(&btc_usdc()).unwrap();
+    let asks = book.depth_asks(1);
+    assert_eq!(asks.len(), 1);
+    let (_price, visible) = asks[0];
+    assert_eq!(
+        visible,
+        2 * QUANTITY_SCALE,
+        "public depth shows display_qty"
+    );
+
+    // top_ask_quantity uses the full remaining for internal use.
+    assert_eq!(
+        book.top_ask_quantity(),
+        10 * QUANTITY_SCALE,
+        "internal callers see full remaining"
+    );
+}
+
+/// Iceberg: the hidden reserve is still matchable. A large taker consumes
+/// through it in one sweep (v1 behavior).
+#[test]
+fn test_iceberg_hidden_reserve_is_matchable() {
+    let mut e = engine();
+    let maker = user(1);
+    let taker = user(2);
+
+    e.process(deposit(maker.clone(), btc(), 100 * QUANTITY_SCALE), 1);
+    e.process(deposit(taker.clone(), usdc(), 100_000 * PRICE_SCALE), 2);
+
+    // Maker posts iceberg ask: 10 BTC total, display 2.
+    e.process(post_iceberg_ask(maker.clone(), 100, 10, 2, 1), 3);
+
+    // Taker sweeps 10 BTC — should fill the whole iceberg.
+    let responses = e.process(post_bid(taker, 100, 10, 1), 4);
+
+    let filled: u64 = responses
+        .iter()
+        .filter_map(|r| {
+            if let Response::OrderFilled(f) = r {
+                Some(f.quantity)
+            } else {
+                None
+            }
+        })
+        .sum();
+    assert_eq!(
+        filled,
+        10 * QUANTITY_SCALE,
+        "taker matched through the hidden reserve"
+    );
+}
+
+/// After a partial fill of an iceberg order, the visible depth remains
+/// at display_quantity (until the remaining reserve drops below).
+#[test]
+fn test_iceberg_visible_refills_after_partial_fill() {
+    let mut e = engine();
+    let maker = user(1);
+    let taker = user(2);
+
+    e.process(deposit(maker.clone(), btc(), 100 * QUANTITY_SCALE), 1);
+    e.process(deposit(taker.clone(), usdc(), 100_000 * PRICE_SCALE), 2);
+
+    // Iceberg: 10 total, display 3.
+    e.process(post_iceberg_ask(maker.clone(), 100, 10, 3, 1), 3);
+    // Small taker: fills 1 BTC out of 10. Iceberg remaining now 9.
+    e.process(post_bid(taker, 100, 1, 1), 4);
+
+    let book = e.order_books.get(&btc_usdc()).unwrap();
+    let (_price, visible) = book.depth_asks(1)[0];
+    assert_eq!(
+        visible,
+        3 * QUANTITY_SCALE,
+        "visible refills to display size after partial fill"
+    );
+    // Full remaining is 9.
+    assert_eq!(book.top_ask_quantity(), 9 * QUANTITY_SCALE);
+}
+
+/// When remaining drops below display, visible = remaining.
+#[test]
+fn test_iceberg_visible_tail_below_display() {
+    let mut e = engine();
+    let maker = user(1);
+    let taker = user(2);
+
+    e.process(deposit(maker.clone(), btc(), 100 * QUANTITY_SCALE), 1);
+    e.process(deposit(taker.clone(), usdc(), 100_000 * PRICE_SCALE), 2);
+
+    // Iceberg: 5 total, display 3.
+    e.process(post_iceberg_ask(maker.clone(), 100, 5, 3, 1), 3);
+    // Taker fills 3.
+    e.process(post_bid(taker, 100, 3, 1), 4);
+
+    let book = e.order_books.get(&btc_usdc()).unwrap();
+    let (_price, visible) = book.depth_asks(1)[0];
+    // Remaining is 2, display is 3, so visible = min(3, 2) = 2.
+    assert_eq!(visible, 2 * QUANTITY_SCALE);
+}
+
+/// Validation: display_quantity = 0 is rejected.
+#[test]
+fn test_iceberg_zero_display_rejected() {
+    let mut e = engine();
+    let maker = user(1);
+    e.process(deposit(maker.clone(), btc(), 10 * QUANTITY_SCALE), 1);
+
+    let req = Request::PostOrder(PostOrderRequest {
+        user: maker,
+        market: btc_usdc(),
+        side: OrderSide::Ask,
+        order_type: OrderType::GoodTillCanceled,
+        price: 100 * PRICE_SCALE,
+        quantity: 5 * QUANTITY_SCALE,
+        nonce: 1,
+        client_order_id: None,
+        signature: vec![0u8; 65],
+        stp: Default::default(),
+        min_quantity: None,
+        display_quantity: Some(0),
+    });
+    let responses = e.process(req, 2);
+    let err = responses.iter().find_map(|r| {
+        if let Response::Error(e) = r {
+            Some(e.code)
+        } else {
+            None
+        }
+    });
+    assert_eq!(err, Some(ErrorCode::InvalidDisplayQuantity));
+}
+
+/// Validation: display > quantity is rejected.
+#[test]
+fn test_iceberg_display_larger_than_quantity_rejected() {
+    let mut e = engine();
+    let maker = user(1);
+    e.process(deposit(maker.clone(), btc(), 100 * QUANTITY_SCALE), 1);
+
+    let req = Request::PostOrder(PostOrderRequest {
+        user: maker,
+        market: btc_usdc(),
+        side: OrderSide::Ask,
+        order_type: OrderType::GoodTillCanceled,
+        price: 100 * PRICE_SCALE,
+        quantity: 5 * QUANTITY_SCALE,
+        nonce: 1,
+        client_order_id: None,
+        signature: vec![0u8; 65],
+        stp: Default::default(),
+        min_quantity: None,
+        display_quantity: Some(10 * QUANTITY_SCALE),
+    });
+    let responses = e.process(req, 2);
+    let err = responses.iter().find_map(|r| {
+        if let Response::Error(e) = r {
+            Some(e.code)
+        } else {
+            None
+        }
+    });
+    assert_eq!(err, Some(ErrorCode::InvalidDisplayQuantity));
+}
+
+/// Validation: iceberg on IOC is rejected (would-not-rest is meaningless).
+#[test]
+fn test_iceberg_on_ioc_rejected() {
+    let mut e = engine();
+    let maker = user(1);
+    e.process(deposit(maker.clone(), btc(), 100 * QUANTITY_SCALE), 1);
+
+    let req = Request::PostOrder(PostOrderRequest {
+        user: maker,
+        market: btc_usdc(),
+        side: OrderSide::Ask,
+        order_type: OrderType::ImmediateOrCancel,
+        price: 100 * PRICE_SCALE,
+        quantity: 5 * QUANTITY_SCALE,
+        nonce: 1,
+        client_order_id: None,
+        signature: vec![0u8; 65],
+        stp: Default::default(),
+        min_quantity: None,
+        display_quantity: Some(2 * QUANTITY_SCALE),
+    });
+    let responses = e.process(req, 2);
+    let err = responses.iter().find_map(|r| {
+        if let Response::Error(e) = r {
+            Some(e.code)
+        } else {
+            None
+        }
+    });
+    assert_eq!(err, Some(ErrorCode::InvalidDisplayQuantity));
 }

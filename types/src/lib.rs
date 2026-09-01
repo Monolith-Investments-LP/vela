@@ -317,6 +317,13 @@ pub struct Order {
     /// (all delta writes rolled back).
     #[serde(default)]
     pub min_quantity: Option<Quantity>,
+    /// Iceberg display quantity. When set, only `display_quantity` worth
+    /// of the order shows up in public depth queries; the rest is hidden.
+    /// Matching still uses the full remaining quantity, so a large taker
+    /// can consume the hidden reserve in one sweep. Must satisfy
+    /// `0 < display_quantity <= quantity` when present.
+    #[serde(default)]
+    pub display_quantity: Option<Quantity>,
 }
 
 impl Order {
@@ -326,6 +333,21 @@ impl Order {
 
     pub fn is_fully_filled(&self) -> bool {
         self.filled_quantity >= self.quantity
+    }
+
+    /// Quantity that should appear in public depth queries.
+    ///
+    /// For a regular order this is just `remaining_quantity()`. For an
+    /// iceberg order it's `min(display_quantity, remaining_quantity)`,
+    /// which naturally refills as fills consume the visible slice: after
+    /// each partial fill the newly-computed visible amount is the same
+    /// display size until the remaining reserve drops below it.
+    pub fn visible_quantity(&self) -> Quantity {
+        let remaining = self.remaining_quantity();
+        match self.display_quantity {
+            Some(display) if display > 0 => display.min(remaining),
+            _ => remaining,
+        }
     }
 }
 
@@ -630,6 +652,8 @@ pub struct PostOrderRequest {
     pub stp: SelfTradePreventionMode,
     #[serde(default)]
     pub min_quantity: Option<Quantity>,
+    #[serde(default)]
+    pub display_quantity: Option<Quantity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -762,6 +786,9 @@ pub enum ErrorCode {
     /// `min_quantity` was set on the order and the total filled quantity
     /// across the initial dispatch did not meet the threshold.
     MinQuantityNotMet,
+    /// `display_quantity` was zero, negative, or greater than the order
+    /// quantity.
+    InvalidDisplayQuantity,
     InternalError,
 }
 
@@ -795,6 +822,8 @@ pub enum VelaError {
     StpTakerCanceled,
     #[error("min_quantity not met: filled {filled}, minimum {min}")]
     MinQuantityNotMet { filled: u64, min: u64 },
+    #[error("display_quantity must be > 0 and <= quantity")]
+    InvalidDisplayQuantity,
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -832,6 +861,7 @@ impl From<VelaError> for ErrorResponse {
             VelaError::InvalidClientOrderId => ErrorCode::InvalidClientOrderId,
             VelaError::StpTakerCanceled => ErrorCode::StpTakerCanceled,
             VelaError::MinQuantityNotMet { .. } => ErrorCode::MinQuantityNotMet,
+            VelaError::InvalidDisplayQuantity => ErrorCode::InvalidDisplayQuantity,
             VelaError::InvalidAddress | VelaError::Internal(_) => ErrorCode::InternalError,
         };
         ErrorResponse {

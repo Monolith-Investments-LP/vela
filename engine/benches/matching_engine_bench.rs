@@ -75,6 +75,7 @@ fn post_req(
         signature: vec![],
         stp: Default::default(),
         min_quantity: None,
+        display_quantity: None,
     })
 }
 

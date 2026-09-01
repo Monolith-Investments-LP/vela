@@ -294,6 +294,7 @@ impl SimState {
                                 signature: vec![0u8; 65],
                                 stp: Default::default(),
                                 min_quantity: None,
+                                display_quantity: None,
                             }),
                             ts,
                         );
@@ -365,6 +366,7 @@ impl SimState {
                 signature: vec![0u8; 65],
                 stp: Default::default(),
                 min_quantity: None,
+                display_quantity: None,
             }),
         )
     }
@@ -423,6 +425,7 @@ impl SimState {
             signature: vec![0u8; 65],
             stp: Default::default(),
             min_quantity: None,
+            display_quantity: None,
         })
     }
 }
@@ -1249,6 +1252,7 @@ fn build_deep_sim(target_levels_per_side: usize) -> SimState {
                         signature: vec![0u8; 65],
                         stp: Default::default(),
                         min_quantity: None,
+                        display_quantity: None,
                     }),
                     ts,
                 );

@@ -708,6 +708,7 @@ async fn post_order(
         signature: vec![],
         stp: Default::default(),
         min_quantity: None,
+        display_quantity: None,
     };
 
     let ts = std::time::SystemTime::now()

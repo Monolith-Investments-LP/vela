@@ -218,6 +218,7 @@ async fn test_get_order_by_client_id_found() {
             signature: vec![0u8; 65],
             stp: Default::default(),
             min_quantity: None,
+            display_quantity: None,
         }),
         2,
     );

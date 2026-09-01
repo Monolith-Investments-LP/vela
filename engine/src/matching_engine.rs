@@ -248,6 +248,21 @@ impl MatchingEngine {
             }
         }
 
+        // Iceberg validation: display_quantity must be > 0 and <= total.
+        // Iceberg only makes sense for orders that can rest; reject on
+        // IOC/FOK to keep semantics unsurprising.
+        if let Some(display) = req.display_quantity {
+            if display == 0 || display > req.quantity {
+                return Err(VelaError::InvalidDisplayQuantity);
+            }
+            if matches!(
+                req.order_type,
+                OrderType::ImmediateOrCancel | OrderType::FillOrKill
+            ) {
+                return Err(VelaError::InvalidDisplayQuantity);
+            }
+        }
+
         let meta_base: &EngineMap<UserId, UserMetadata> =
             self.snapshot_metadata.as_deref().unwrap_or(&self.metadata);
         let bal_base: &EngineMap<(UserId, AssetId), Balance> =
@@ -307,6 +322,7 @@ impl MatchingEngine {
             status: OrderStatus::Open,
             stp: req.stp,
             min_quantity: req.min_quantity,
+            display_quantity: req.display_quantity,
         };
 
         let (fills, auto_canceled, taker_canceled_by_stp) =

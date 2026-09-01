@@ -16,8 +16,20 @@ impl PriceLevel {
         }
     }
 
+    /// Full remaining quantity across all orders at this level.
+    /// Includes iceberg hidden reserves. Used by matching-side code
+    /// (top-of-book depth for toxicity scoring) that needs to see the
+    /// real matchable size.
     pub fn total_quantity(&self) -> Quantity {
         self.orders.iter().map(|o| o.remaining_quantity()).sum()
+    }
+
+    /// Publicly-visible quantity across all orders at this level.
+    /// Iceberg orders contribute only their `display_quantity`. Used by
+    /// public book-depth queries (`depth_bids`/`depth_asks`) and
+    /// WebSocket broadcasts.
+    pub fn visible_quantity(&self) -> Quantity {
+        self.orders.iter().map(|o| o.visible_quantity()).sum()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -210,12 +222,16 @@ impl OrderBook {
             .map(|(p, l)| (*p, &l.orders))
     }
 
+    /// Public depth: sums `visible_quantity()` per order so iceberg
+    /// hidden reserves are masked. Matching-side callers should use
+    /// `top_bid_quantity`/`top_ask_quantity` (which use full remaining)
+    /// so the matcher can walk hidden liquidity.
     pub fn depth_bids(&self, levels: usize) -> Vec<(Price, Quantity)> {
         self.bids
             .iter()
             .rev()
             .take(levels)
-            .map(|(p, l)| (*p, l.total_quantity()))
+            .map(|(p, l)| (*p, l.visible_quantity()))
             .collect()
     }
 
@@ -223,7 +239,7 @@ impl OrderBook {
         self.asks
             .iter()
             .take(levels)
-            .map(|(p, l)| (*p, l.total_quantity()))
+            .map(|(p, l)| (*p, l.visible_quantity()))
             .collect()
     }
 
