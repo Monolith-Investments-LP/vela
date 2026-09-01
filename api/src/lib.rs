@@ -223,7 +223,11 @@ impl AppState {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("/data/da"));
 
-        let prover: Arc<dyn ZkProver> = Arc::new(zkvm::PlaceholderProver);
+        // Prover selection is env-driven so operators can flip
+        // placeholder → sp1 without rebuilding: `VELA_PROVER=sp1`,
+        // combined with `VELA_SP1_PROVER_URL` for the network path
+        // (falls back to `sp1-mock` if URL unset).
+        let prover: Arc<dyn ZkProver> = zkvm::prover_from_env();
         let attester: Arc<dyn TeeAttester> = Arc::new(tee::PlaceholderAttester::new());
 
         let (t, n) = committee::committee_config_from_env();
