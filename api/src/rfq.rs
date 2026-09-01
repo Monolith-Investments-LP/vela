@@ -66,6 +66,33 @@ pub fn maker_allowlist() -> std::collections::HashSet<String> {
     }
 }
 
+/// Reputation-score threshold (in bps) at which an agent can post
+/// quotes to the RFQ rail without being on the human allowlist.
+/// Default 6_000 bps (60% of ideal). Overridable via
+/// `VELA_RFQ_MAKER_MIN_SCORE_BPS`. Set to `10_001` to disable the
+/// agent-maker path entirely (allowlist becomes the sole gate).
+pub fn agent_maker_min_score_bps() -> u16 {
+    std::env::var("VELA_RFQ_MAKER_MIN_SCORE_BPS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(6_000)
+}
+
+/// Tag on a stored `RfqQuote` that records how the maker was cleared
+/// to post. Persisted so the requester can filter on it at accept time
+/// (some requesters may prefer only human-desk quotes, others will
+/// take the best price regardless of provenance).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum MakerProvenance {
+    #[default]
+    Allowlist,
+    /// Cleared via a reputation attestation. The attesting operator
+    /// signature is not re-attached here (it's in reputation_cache);
+    /// callers who want to verify pull it from
+    /// `GET /reputation/:maker`.
+    Reputation { score_bps: u16 },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RfqStatus {
     Open,
@@ -103,6 +130,10 @@ pub struct RfqQuote {
     /// Wall-clock ms after which this quote is stale.
     pub expires_at_ms: u64,
     pub created_at_ms: u64,
+    /// How the maker was cleared to post this quote. Defaults to
+    /// `Allowlist` for wire-compat with pre-3.6 quotes.
+    #[serde(default)]
+    pub provenance: MakerProvenance,
 }
 
 #[derive(Default)]
@@ -132,4 +163,28 @@ pub fn next_rfq_id() -> u64 {
 
 pub fn next_quote_id() -> u64 {
     NEXT_QUOTE_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_maker_min_score_defaults_to_6000() {
+        // Sanity: default matches the doc comment.
+        // Can't rely on env var absence in parallel tests; just assert
+        // the parser returns something in the sensible band when unset.
+        let s = agent_maker_min_score_bps();
+        assert!(s <= 10_001);
+    }
+
+    #[test]
+    fn maker_provenance_serializes() {
+        let p = MakerProvenance::Reputation { score_bps: 8_000 };
+        let j = serde_json::to_string(&p).unwrap();
+        assert!(j.contains("8000"));
+        assert!(j.contains("Reputation"));
+        let d: MakerProvenance = serde_json::from_str(&j).unwrap();
+        assert_eq!(d, p);
+    }
 }

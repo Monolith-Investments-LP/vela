@@ -3845,17 +3845,39 @@ async fn rfq_quote(
     State(state): State<Arc<AppState>>,
     Json(body): Json<RfqQuoteBody>,
 ) -> impl IntoResponse {
-    // Check MM allowlist.
+    // Two admit paths, in order:
+    //   1. Human-desk allowlist (VELA_RFQ_MAKERS) — always accepted.
+    //   2. Agent-maker path (Tier 3.6): non-expired reputation
+    //      attestation on file with score_bps ≥ VELA_RFQ_MAKER_MIN_SCORE_BPS.
+    // Neither → 403. Tag the quote with the provenance so requesters
+    // can see how the quote earned its slot.
+    let maker_lower = body.maker.to_lowercase();
     let allow = crate::rfq::maker_allowlist();
-    if !allow.contains(&body.maker.to_lowercase()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ApiResponse::<()>::err(
-                "maker not in RFQ allowlist (see VELA_RFQ_MAKERS)",
-            )),
-        )
-            .into_response();
-    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let provenance = if allow.contains(&maker_lower) {
+        crate::rfq::MakerProvenance::Allowlist
+    } else {
+        let min_score = crate::rfq::agent_maker_min_score_bps();
+        match state.reputation_cache.get(&maker_lower) {
+            Some(r) if r.expires_at_ms > now_ms && r.score_bps >= min_score => {
+                crate::rfq::MakerProvenance::Reputation {
+                    score_bps: r.score_bps,
+                }
+            }
+            _ => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(ApiResponse::<()>::err(
+                        "maker not admitted: not on VELA_RFQ_MAKERS and no reputation attestation ≥ VELA_RFQ_MAKER_MIN_SCORE_BPS on file",
+                    )),
+                )
+                    .into_response();
+            }
+        }
+    };
 
     // Fetch the request to validate against.
     let req = match state.rfq.requests.get(&body.rfq_id) {
@@ -3905,24 +3927,31 @@ async fn rfq_quote(
             .into_response();
     }
 
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
     let quote_id = crate::rfq::next_quote_id();
     let quote = crate::rfq::RfqQuote {
         quote_id,
         rfq_id: body.rfq_id,
-        maker: body.maker.to_lowercase(),
+        maker: maker_lower.clone(),
         price: body.price,
         quantity: body.quantity,
         expires_at_ms: body.expires_at_ms,
         created_at_ms: now_ms,
+        provenance,
     };
     state
         .rfq
         .quotes
         .insert((body.rfq_id, quote_id), quote.clone());
+
+    tracing::info!(
+        target: "rfq",
+        rfq_id = body.rfq_id,
+        quote_id,
+        maker = %maker_lower,
+        price = body.price,
+        provenance = ?quote.provenance,
+        "rfq quote posted"
+    );
 
     (StatusCode::OK, Json(ApiResponse::ok(quote))).into_response()
 }
