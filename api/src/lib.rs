@@ -27,6 +27,7 @@ pub mod subaccounts;
 pub mod toxicity_feed;
 pub mod types;
 pub mod vaults;
+pub mod verifiable_intent;
 pub mod wal;
 pub mod ws;
 

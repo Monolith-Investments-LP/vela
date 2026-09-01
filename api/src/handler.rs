@@ -231,6 +231,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             get(get_order_by_client_id),
         )
         .route("/orders", post(post_order))
+        .route(
+            "/orders/from-intent",
+            post(crate::verifiable_intent::from_intent_handler),
+        )
         .route("/orders/cancel", post(cancel_order))
         .route("/orders/:order_id", get(get_order_by_id))
         .route("/orders/:order_id/da-proof", get(get_da_proof))
