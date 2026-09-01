@@ -273,10 +273,6 @@ impl Wal {
             tracing::error!("WAL write error: {e}");
             return Err(e.into());
         }
-        if let Err(e) = inner.file.sync_all().await {
-            tracing::error!("WAL sync error: {e}");
-            return Err(e.into());
-        }
 
         inner.segment_size += entry_len;
 
@@ -291,6 +287,19 @@ impl Wal {
         }
 
         Ok(seq)
+    }
+
+    /// Flush all buffered writes to disk (one `sync_all` per call).
+    /// Call once after all entries for a dispatch batch have been appended
+    /// to amortise fsync cost across the entire batch.
+    pub async fn flush(&self) -> Result<()> {
+        #[allow(unused_mut)]
+        let mut inner = self.inner.lock().await;
+        if let Err(e) = inner.file.sync_all().await {
+            tracing::error!("WAL flush error: {e}");
+            return Err(e.into());
+        }
+        Ok(())
     }
 
     pub async fn rotate(&self) -> Result<()> {

@@ -705,6 +705,10 @@ async fn record_order_and_fills(
             tracing::error!("WAL FILL_CREATED failed: {e}");
         }
     }
+    // One fsync per order batch — covers ORDER_POST, ORDER_PROCESSED, and all FILL_CREATED entries.
+    if let Err(e) = state.wal.flush().await {
+        tracing::error!("WAL flush failed: {e}");
+    }
 
     let da_order_id = new_order.id;
     let da_bytes = serde_json::to_vec(&new_order).unwrap_or_default();

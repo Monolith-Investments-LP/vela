@@ -336,6 +336,7 @@ async fn main() {
         tracing::info!("VELA_PYTH_ENABLED=false — Pyth feed task disabled");
     }
 
+    let shutdown_state = Arc::clone(&state);
     let router = api::build_router(state);
 
     let addr = format!("0.0.0.0:{port}");
@@ -364,6 +365,12 @@ async fn main() {
         _ = terminate => {
             tracing::info!("SIGTERM received, shutting down");
         }
+    }
+
+    // Write clean-shutdown snapshot before the final WAL entry so recovery
+    // can detect a clean exit via snapshot.clean_shutdown == true.
+    if let Err(e) = api::snapshot::save_snapshot(shutdown_state, true).await {
+        tracing::error!("Final snapshot save failed: {e}");
     }
 
     wal.append(api::wal::ENGINE_STOP, &WalEngineStop {

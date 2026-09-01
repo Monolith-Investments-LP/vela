@@ -49,7 +49,7 @@ pub struct EngineSnapshot {
     pub attestations: HashMap<u64, AttestationRecord>,
 }
 
-pub async fn save_snapshot(state: Arc<crate::AppState>) -> Result<()> {
+pub async fn save_snapshot(state: Arc<crate::AppState>, clean_shutdown: bool) -> Result<()> {
     let (timestamp, balances, orders, markets, sequence, metadata, fee_balances) = {
         let engine = state.engine.lock().await;
 
@@ -99,7 +99,7 @@ pub async fn save_snapshot(state: Arc<crate::AppState>) -> Result<()> {
         sequence,
         metadata,
         fee_balances,
-        clean_shutdown: false,
+        clean_shutdown,
         incidents,
         decisions,
         registered_mms,
@@ -150,7 +150,7 @@ pub async fn load_snapshot() -> Result<Option<EngineSnapshot>> {
 pub async fn run_snapshot_task(state: Arc<crate::AppState>) {
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(SNAPSHOT_INTERVAL_SECS)).await;
-        if let Err(e) = save_snapshot(Arc::clone(&state)).await {
+        if let Err(e) = save_snapshot(Arc::clone(&state), false).await {
             tracing::error!("Snapshot error: {e}");
         } else {
             let ts = std::time::SystemTime::now()
