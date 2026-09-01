@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 export type WsClientMessage =
   | { type: 'subscribe'; channels: string[] }
   | { type: 'unsubscribe'; channels: string[] }
@@ -5,17 +7,59 @@ export type WsClientMessage =
   | { type: 'auth'; address: string; signature: string; nonce?: string; timestamp?: number }
   | { type: 'ping' }
 
-export type WsServerMessage =
-  | { type: 'subscribed'; channels: string[] }
-  | { type: 'book_snapshot'; market: string; bids: [string, string][]; asks: [string, string][] }
-  | { type: 'trade'; market: string; price: string; quantity: string; side: string; timestamp: number }
-  | { type: 'order_update'; order_id: number; status: string; filled_quantity: string }
-  | { type: 'fill'; maker_order_id: number; taker_order_id: number; price: string; quantity: string; side: string; maker_fee: string; taker_fee: string; timestamp: number }
-  | { type: 'balance_update'; asset: string; available: string; locked: string }
-  | { type: 'challenge'; nonce: string }
-  | { type: 'authenticated'; address: string }
-  | { type: 'error'; code: string; message: string }
-  | { type: 'pong' }
+/// Server → client message envelope. Every message from the engine
+/// MUST match one of these variants at the wire boundary; unknown or
+/// malformed messages are dropped by `handleRawMessage` with a
+/// console.warn so a compromised or version-mismatched server can't
+/// smuggle unexpected fields into downstream handlers.
+const stringTuple = z.tuple([z.string(), z.string()])
+
+const WsServerMessageSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('subscribed'), channels: z.array(z.string()) }),
+  z.object({
+    type: z.literal('book_snapshot'),
+    market: z.string(),
+    bids: z.array(stringTuple),
+    asks: z.array(stringTuple),
+  }),
+  z.object({
+    type: z.literal('trade'),
+    market: z.string(),
+    price: z.string(),
+    quantity: z.string(),
+    side: z.string(),
+    timestamp: z.number(),
+  }),
+  z.object({
+    type: z.literal('order_update'),
+    order_id: z.number(),
+    status: z.string(),
+    filled_quantity: z.string(),
+  }),
+  z.object({
+    type: z.literal('fill'),
+    maker_order_id: z.number(),
+    taker_order_id: z.number(),
+    price: z.string(),
+    quantity: z.string(),
+    side: z.string(),
+    maker_fee: z.string(),
+    taker_fee: z.string(),
+    timestamp: z.number(),
+  }),
+  z.object({
+    type: z.literal('balance_update'),
+    asset: z.string(),
+    available: z.string(),
+    locked: z.string(),
+  }),
+  z.object({ type: z.literal('challenge'), nonce: z.string() }),
+  z.object({ type: z.literal('authenticated'), address: z.string() }),
+  z.object({ type: z.literal('error'), code: z.string(), message: z.string() }),
+  z.object({ type: z.literal('pong') }),
+])
+
+export type WsServerMessage = z.infer<typeof WsServerMessageSchema>
 
 export type MessageHandler = (msg: WsServerMessage) => void
 export type StatusHandler = (status: WsStatus) => void
@@ -203,21 +247,23 @@ export class VelaWsClient {
   }
 
   private handleRawMessage(event: MessageEvent): void {
-    let msg: Record<string, unknown>
+    let raw: Record<string, unknown>
     try {
-      msg = JSON.parse(event.data as string) as Record<string, unknown>
+      raw = JSON.parse(event.data as string) as Record<string, unknown>
     } catch {
       return
     }
 
-    if (msg['type'] === 'pong') {
+    if (raw['type'] === 'pong') {
       this.clearHeartbeatTimeout()
     }
 
-    if (typeof msg['channel'] === 'string' && typeof msg['seq'] === 'number') {
-      const channel = msg['channel'] as string
-      const seq = msg['seq'] as number
-      const data = msg['data'] as unknown
+    // Channel-envelope path: engine wraps typed payloads in
+    // { type, channel, seq, timestamp, data }.
+    if (typeof raw['channel'] === 'string' && typeof raw['seq'] === 'number') {
+      const channel = raw['channel'] as string
+      const seq = raw['seq'] as number
+      const data = raw['data'] as unknown
 
       const lastSeq = this.seqNums.get(channel)
       if (lastSeq !== undefined && seq !== lastSeq + 1 && seq !== 1) {
@@ -233,18 +279,30 @@ export class VelaWsClient {
         callbacks.forEach((cb) => cb(data))
       }
 
-      const d = data as Record<string, unknown>
-      const flatMsg = {
+      const d = (data ?? {}) as Record<string, unknown>
+      const flatCandidate = {
         ...d,
-        type: msg['type'],
+        type: raw['type'],
         market: d['market_id'] ?? d['market'],
-        timestamp: d['timestamp'] ?? msg['timestamp'],
+        timestamp: d['timestamp'] ?? raw['timestamp'],
       }
-      this.messageHandlers.forEach((h) => h(flatMsg as unknown as WsServerMessage))
+      const parsed = WsServerMessageSchema.safeParse(flatCandidate)
+      if (parsed.success) {
+        this.messageHandlers.forEach((h) => h(parsed.data))
+      } else {
+        console.warn(`WS envelope on ${channel} failed validation`, parsed.error.issues)
+      }
       return
     }
 
-    this.messageHandlers.forEach((h) => h(msg as unknown as WsServerMessage))
+    // Bare-message path: server sent a top-level typed message
+    // (subscribed/challenge/authenticated/error/pong).
+    const parsed = WsServerMessageSchema.safeParse(raw)
+    if (parsed.success) {
+      this.messageHandlers.forEach((h) => h(parsed.data))
+    } else {
+      console.warn('WS message failed validation', parsed.error.issues)
+    }
   }
 
   private scheduleReconnect(): void {
