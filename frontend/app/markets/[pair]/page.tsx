@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import Skeleton from '@/components/ui/Skeleton'
-import { createChart, CandlestickSeries } from 'lightweight-charts'
+// Chart runtime is dynamically imported inside ChartArea's mount effect
+// so it doesn't land in the initial route bundle (~300 KB gzipped).
+// Types are erased at compile time and add no runtime cost.
 import type { IChartApi, ISeriesApi, CandlestickData, Time } from 'lightweight-charts'
 import {
   getOrders,
@@ -277,51 +279,64 @@ function ChartArea({ pair, midPrice, timeframe, onLiveChange }: { pair: string; 
     const container = containerRef.current
     if (!container) return
 
-    const chart = createChart(container, {
-      layout: {
-        background: { color: '#0C0C0C' },
-        textColor: 'rgba(232,228,216,0.3)',
-        fontFamily: IN,
-        fontSize: 10,
-      },
-      grid: {
-        vertLines: { color: 'rgba(232,228,216,0.04)' },
-        horzLines: { color: 'rgba(232,228,216,0.04)' },
-      },
-      crosshair: {
-        vertLine: { color: 'rgba(232,228,216,0.15)', width: 1, style: 3 },
-        horzLine: { color: 'rgba(232,228,216,0.15)', width: 1, style: 3 },
-      },
-      rightPriceScale: { borderColor: 'rgba(232,228,216,0.06)' },
-      timeScale: { borderColor: 'rgba(232,228,216,0.06)', timeVisible: true, secondsVisible: false },
-      width: container.clientWidth,
-      height: container.clientHeight,
-    })
+    let cancelled = false
+    let cleanup: (() => void) | null = null
 
-    const series = chart.addSeries(CandlestickSeries, {
-      upColor: '#6B8A5A',
-      downColor: '#CC3333',
-      borderUpColor: '#6B8A5A',
-      borderDownColor: '#CC3333',
-      wickUpColor: '#6B8A5A',
-      wickDownColor: '#CC3333',
-    })
+    ;(async () => {
+      const { createChart, CandlestickSeries } = await import('lightweight-charts')
+      if (cancelled) return
 
-    chartRef.current = chart
-    seriesRef.current = series
+      const chart = createChart(container, {
+        layout: {
+          background: { color: '#0C0C0C' },
+          textColor: 'rgba(232,228,216,0.3)',
+          fontFamily: IN,
+          fontSize: 10,
+        },
+        grid: {
+          vertLines: { color: 'rgba(232,228,216,0.04)' },
+          horzLines: { color: 'rgba(232,228,216,0.04)' },
+        },
+        crosshair: {
+          vertLine: { color: 'rgba(232,228,216,0.15)', width: 1, style: 3 },
+          horzLine: { color: 'rgba(232,228,216,0.15)', width: 1, style: 3 },
+        },
+        rightPriceScale: { borderColor: 'rgba(232,228,216,0.06)' },
+        timeScale: { borderColor: 'rgba(232,228,216,0.06)', timeVisible: true, secondsVisible: false },
+        width: container.clientWidth,
+        height: container.clientHeight,
+      })
 
-    const ro = new ResizeObserver(() => {
-      if (container && chartRef.current) {
-        chartRef.current.applyOptions({ width: container.clientWidth, height: container.clientHeight })
+      const series = chart.addSeries(CandlestickSeries, {
+        upColor: '#6B8A5A',
+        downColor: '#CC3333',
+        borderUpColor: '#6B8A5A',
+        borderDownColor: '#CC3333',
+        wickUpColor: '#6B8A5A',
+        wickDownColor: '#CC3333',
+      })
+
+      chartRef.current = chart
+      seriesRef.current = series
+
+      const ro = new ResizeObserver(() => {
+        if (container && chartRef.current) {
+          chartRef.current.applyOptions({ width: container.clientWidth, height: container.clientHeight })
+        }
+      })
+      ro.observe(container)
+
+      cleanup = () => {
+        ro.disconnect()
+        chart.remove()
+        chartRef.current = null
+        seriesRef.current = null
       }
-    })
-    ro.observe(container)
+    })()
 
     return () => {
-      ro.disconnect()
-      chart.remove()
-      chartRef.current = null
-      seriesRef.current = null
+      cancelled = true
+      if (cleanup) cleanup()
     }
   }, [])
 
