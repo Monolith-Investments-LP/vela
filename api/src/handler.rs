@@ -78,13 +78,16 @@ fn sign_withdrawal_op(
     asset_addr: [u8; 20],
     amount_wei: u128,
     nonce: u64,
+    chain_id: u64,
+    settlement_addr: [u8; 20],
 ) -> Result<String, String> {
     let key_hex = operator_key_hex.strip_prefix("0x").unwrap_or(&operator_key_hex).to_string();
     let key_bytes = hex::decode(&key_hex).map_err(|_| "invalid operator key".to_string())?;
     let signing_key = SigningKey::from_slice(&key_bytes).map_err(|e| e.to_string())?;
 
-    const CHAIN_ID: u64 = 11155111;
-    let mut packed: Vec<u8> = Vec::with_capacity(136);
+    // Must match VelaSettlement.withdrawHash: keccak256(user || asset || amount ||
+    // nonce || chainid || address(this)) inside the "\x19Ethereum Signed Message" envelope.
+    let mut packed: Vec<u8> = Vec::with_capacity(20 + 20 + 32 + 32 + 32 + 20);
     packed.extend_from_slice(&user_bytes);
     packed.extend_from_slice(&asset_addr);
 
@@ -97,8 +100,10 @@ fn sign_withdrawal_op(
     packed.extend_from_slice(&nonce_bytes);
 
     let mut chain_id_bytes = [0u8; 32];
-    chain_id_bytes[24..].copy_from_slice(&CHAIN_ID.to_be_bytes());
+    chain_id_bytes[24..].copy_from_slice(&chain_id.to_be_bytes());
     packed.extend_from_slice(&chain_id_bytes);
+
+    packed.extend_from_slice(&settlement_addr);
 
     let inner_hash: [u8; 32] = {
         let mut h = Keccak256::new();
@@ -112,11 +117,36 @@ fn sign_withdrawal_op(
         .sign_prehash_recoverable(&final_hash)
         .map_err(|e| e.to_string())?;
 
+    // OZ ECDSA rejects malleable (high-s) signatures — normalise before returning.
+    let sig = sig.normalize_s().unwrap_or(sig);
+
     let mut eth_sig = Vec::with_capacity(65);
     eth_sig.extend_from_slice(sig.to_bytes().as_ref());
     eth_sig.push(recid.to_byte() + 27);
 
     Ok(format!("0x{}", hex::encode(&eth_sig)))
+}
+
+fn parse_hex_address(s: &str) -> Result<[u8; 20], String> {
+    let trimmed = s.strip_prefix("0x").unwrap_or(s);
+    let bytes = hex::decode(trimmed).map_err(|_| format!("invalid hex address: {s}"))?;
+    if bytes.len() != 20 {
+        return Err(format!("address must be 20 bytes, got {}", bytes.len()));
+    }
+    let mut out = [0u8; 20];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+fn settlement_context() -> Result<(u64, [u8; 20]), String> {
+    let chain_id: u64 = std::env::var("VELA_CHAIN_ID")
+        .unwrap_or_else(|_| "11155111".to_string())
+        .parse()
+        .map_err(|_| "VELA_CHAIN_ID must be a u64".to_string())?;
+    let addr_str = std::env::var("VELA_SETTLEMENT_ADDRESS")
+        .map_err(|_| "VELA_SETTLEMENT_ADDRESS env var must be set to the deployed contract address".to_string())?;
+    let addr = parse_hex_address(&addr_str)?;
+    Ok((chain_id, addr))
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -1126,8 +1156,13 @@ async fn withdrawal_signature_handler(
     let amount_wei_str = amount_wei.to_string();
     let nonce = body.nonce;
 
+    let (chain_id, settlement_addr) = match settlement_context() {
+        Ok(ctx) => ctx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::err(e))).into_response(),
+    };
+
     let signature = match tokio::task::spawn_blocking(move || {
-        sign_withdrawal_op(operator_key, user_bytes, asset_addr, amount_wei, nonce)
+        sign_withdrawal_op(operator_key, user_bytes, asset_addr, amount_wei, nonce, chain_id, settlement_addr)
     })
     .await
     {

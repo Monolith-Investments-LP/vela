@@ -4,9 +4,13 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 contract VelaSettlement is ReentrancyGuard {
     using SafeERC20 for IERC20;
+    using ECDSA for bytes32;
+    using MessageHashUtils for bytes32;
 
     address public operator;
     uint256 public constant EMERGENCY_DELAY = 7 days;
@@ -19,14 +23,29 @@ contract VelaSettlement is ReentrancyGuard {
     // user => asset => Balance
     mapping(address => mapping(address => Balance)) public balances;
 
+    // user => nonce => used
+    // Prevents replay of a valid operator withdrawal signature.
+    mapping(address => mapping(uint256 => bool)) public usedWithdrawNonces;
+
     // ETH represented as address(0)
     address public constant ETH = address(0);
 
     mapping(uint256 => bytes32) public anchoredStateRoots;
     uint256 public anchorCount;
 
+    error ZeroAmount();
+    error UseDepositETHForNative();
+    error InsufficientBalance();
+    error InvalidSignature();
+    error NonceAlreadyUsed();
+    error NoBalance();
+    error EmergencyExitNotInitiated();
+    error TimelockActive();
+    error EthTransferFailed();
+    error NotOperator();
+
     event Deposited(address indexed user, address indexed asset, uint256 amount);
-    event Withdrawn(address indexed user, address indexed asset, uint256 amount);
+    event Withdrawn(address indexed user, address indexed asset, uint256 amount, uint256 nonce);
     event EmergencyExitInitiated(address indexed user, address indexed asset, uint256 unlockAt);
     event EmergencyExitExecuted(address indexed user, address indexed asset, uint256 amount);
     event StateRootAnchored(
@@ -41,22 +60,38 @@ contract VelaSettlement is ReentrancyGuard {
     }
 
     modifier onlyOperator() {
-        require(msg.sender == operator, "Not operator");
+        if (msg.sender != operator) revert NotOperator();
         _;
     }
 
     function depositETH() external payable nonReentrant {
-        require(msg.value > 0, "Zero amount");
+        if (msg.value == 0) revert ZeroAmount();
         balances[msg.sender][ETH].amount += msg.value;
         emit Deposited(msg.sender, ETH, msg.value);
     }
 
     function depositToken(address asset, uint256 amount) external nonReentrant {
-        require(amount > 0, "Zero amount");
-        require(asset != ETH, "Use depositETH for ETH");
+        if (amount == 0) revert ZeroAmount();
+        if (asset == ETH) revert UseDepositETHForNative();
         IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
         balances[msg.sender][asset].amount += amount;
         emit Deposited(msg.sender, asset, amount);
+    }
+
+    /// @notice Hash the operator commits to for `withdraw`.
+    /// Includes `address(this)` and `block.chainid` for domain separation,
+    /// so signatures cannot be replayed against a different Vela deployment
+    /// or a different chain.
+    function withdrawHash(
+        address user,
+        address asset,
+        uint256 amount,
+        uint256 nonce
+    ) public view returns (bytes32) {
+        bytes32 inner = keccak256(
+            abi.encodePacked(user, asset, amount, nonce, block.chainid, address(this))
+        );
+        return inner.toEthSignedMessageHash();
     }
 
     function withdraw(
@@ -65,30 +100,31 @@ contract VelaSettlement is ReentrancyGuard {
         uint256 nonce,
         bytes calldata signature
     ) external nonReentrant {
-        require(amount > 0, "Zero amount");
-        require(balances[msg.sender][asset].amount >= amount, "Insufficient balance");
+        if (amount == 0) revert ZeroAmount();
+        if (balances[msg.sender][asset].amount < amount) revert InsufficientBalance();
+        if (usedWithdrawNonces[msg.sender][nonce]) revert NonceAlreadyUsed();
 
-        bytes32 hash = keccak256(abi.encodePacked(
-            "\x19Ethereum Signed Message:\n32",
-            keccak256(abi.encodePacked(msg.sender, asset, amount, nonce, block.chainid))
-        ));
-        address signer = recoverSigner(hash, signature);
-        require(signer == operator, "Invalid signature");
+        bytes32 hash = withdrawHash(msg.sender, asset, amount, nonce);
+        // ECDSA.recover reverts on malleable (high-s) or malformed signatures.
+        address signer = hash.recover(signature);
+        if (signer != operator) revert InvalidSignature();
 
+        // Effects: consume nonce and debit balance before external interaction.
+        usedWithdrawNonces[msg.sender][nonce] = true;
         balances[msg.sender][asset].amount -= amount;
 
         if (asset == ETH) {
             (bool ok,) = msg.sender.call{value: amount}("");
-            require(ok, "ETH transfer failed");
+            if (!ok) revert EthTransferFailed();
         } else {
             IERC20(asset).safeTransfer(msg.sender, amount);
         }
 
-        emit Withdrawn(msg.sender, asset, amount);
+        emit Withdrawn(msg.sender, asset, amount, nonce);
     }
 
     function initiateEmergencyExit(address asset) external {
-        require(balances[msg.sender][asset].amount > 0, "No balance");
+        if (balances[msg.sender][asset].amount == 0) revert NoBalance();
         uint256 unlockAt = block.timestamp + EMERGENCY_DELAY;
         balances[msg.sender][asset].emergencyUnlockAt = unlockAt;
         emit EmergencyExitInitiated(msg.sender, asset, unlockAt);
@@ -96,9 +132,9 @@ contract VelaSettlement is ReentrancyGuard {
 
     function executeEmergencyExit(address asset) external nonReentrant {
         Balance storage bal = balances[msg.sender][asset];
-        require(bal.amount > 0, "No balance");
-        require(bal.emergencyUnlockAt > 0, "Not initiated");
-        require(block.timestamp >= bal.emergencyUnlockAt, "Timelock active");
+        if (bal.amount == 0) revert NoBalance();
+        if (bal.emergencyUnlockAt == 0) revert EmergencyExitNotInitiated();
+        if (block.timestamp < bal.emergencyUnlockAt) revert TimelockActive();
 
         uint256 amount = bal.amount;
         bal.amount = 0;
@@ -106,7 +142,7 @@ contract VelaSettlement is ReentrancyGuard {
 
         if (asset == ETH) {
             (bool ok,) = msg.sender.call{value: amount}("");
-            require(ok, "ETH transfer failed");
+            if (!ok) revert EthTransferFailed();
         } else {
             IERC20(asset).safeTransfer(msg.sender, amount);
         }
@@ -136,18 +172,5 @@ contract VelaSettlement is ReentrancyGuard {
 
     function getBalance(address user, address asset) external view returns (uint256) {
         return balances[user][asset].amount;
-    }
-
-    function recoverSigner(bytes32 hash, bytes memory sig) internal pure returns (address) {
-        require(sig.length == 65, "Bad signature length");
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
-        assembly {
-            r := mload(add(sig, 32))
-            s := mload(add(sig, 64))
-            v := byte(0, mload(add(sig, 96)))
-        }
-        return ecrecover(hash, v, r, s);
     }
 }
