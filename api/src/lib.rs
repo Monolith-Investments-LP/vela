@@ -77,6 +77,28 @@ pub struct AppState {
     pub decryption_proofs: Arc<Mutex<Vec<::types::DecryptionProof>>>,
     /// Live batch-dispatcher metrics (batch_size histogram, latency, ops/sec).
     pub batch_metrics: Arc<BatchMetrics>,
+    /// Admin bearer token — read from ADMIN_TOKEN at boot and used in
+    /// constant-time comparisons via `AppState::verify_admin_token`.
+    admin_token: String,
+}
+
+impl AppState {
+    /// Constant-time comparison of the provided admin token against the
+    /// value captured at process start. Returns false without ever
+    /// leaking the length or per-byte match position via timing.
+    pub fn verify_admin_token(&self, provided: &str) -> bool {
+        use subtle::ConstantTimeEq;
+        let a = self.admin_token.as_bytes();
+        let b = provided.as_bytes();
+        // ConstantTimeEq requires equal-length inputs. If lengths differ
+        // we still perform a compare of equal length against `a` and
+        // discard the result so timing is data-independent.
+        if a.len() != b.len() {
+            let _ = a.ct_eq(&vec![0u8; a.len()][..]);
+            return false;
+        }
+        a.ct_eq(b).into()
+    }
 }
 
 impl AppState {
@@ -164,6 +186,9 @@ impl AppState {
 
         let batch_metrics = BatchMetrics::new();
 
+        let admin_token = std::env::var("ADMIN_TOKEN")
+            .expect("ADMIN_TOKEN env var must be set; refusing to boot with a hardcoded default");
+
         let state = Arc::new(AppState {
             engine: Arc::clone(&engine_arc),
             shards: Arc::clone(&shards_arc),
@@ -206,6 +231,7 @@ impl AppState {
             committee_config,
             decryption_proofs: Arc::new(Mutex::new(Vec::new())),
             batch_metrics: Arc::clone(&batch_metrics),
+            admin_token,
         });
 
         tokio::spawn(MarketShards::run(

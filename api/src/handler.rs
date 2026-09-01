@@ -845,13 +845,12 @@ async fn admin_reserves_handler(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let expected = std::env::var("ADMIN_TOKEN").expect("ADMIN_TOKEN env var must be set; refusing to boot with a hardcoded default");
     let provided = headers
         .get("x-admin-token")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if provided != expected {
+    if !state.verify_admin_token(provided) {
         return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("unauthorized"))).into_response();
     }
 
@@ -1232,12 +1231,11 @@ async fn force_include_handler(
     Json(body): Json<ForceIncludeBody>,
 ) -> impl IntoResponse {
     // Gate behind admin token in beta — production will verify an L1 Merkle proof.
-    let expected = std::env::var("ADMIN_TOKEN").expect("ADMIN_TOKEN env var must be set; refusing to boot with a hardcoded default");
     let provided = headers
         .get("x-admin-token")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if provided != expected {
+    if !state.verify_admin_token(provided) {
         return (
             StatusCode::UNAUTHORIZED,
             Json(ApiResponse::<()>::err(
@@ -1336,13 +1334,12 @@ async fn admin_state_handler(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let expected = std::env::var("ADMIN_TOKEN").expect("ADMIN_TOKEN env var must be set; refusing to boot with a hardcoded default");
     let provided = headers
         .get("x-admin-token")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if provided != expected {
+    if !state.verify_admin_token(provided) {
         return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("unauthorized"))).into_response();
     }
 
@@ -2289,9 +2286,8 @@ async fn create_incident(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateIncidentBody>,
 ) -> impl IntoResponse {
-    let expected = std::env::var("ADMIN_TOKEN").expect("ADMIN_TOKEN env var must be set; refusing to boot with a hardcoded default");
     let provided = headers.get("x-admin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
-    if provided != expected {
+    if !state.verify_admin_token(provided) {
         return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("unauthorized"))).into_response();
     }
 
@@ -2331,9 +2327,8 @@ async fn create_decision(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateDecisionBody>,
 ) -> impl IntoResponse {
-    let expected = std::env::var("ADMIN_TOKEN").expect("ADMIN_TOKEN env var must be set; refusing to boot with a hardcoded default");
     let provided = headers.get("x-admin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
-    if provided != expected {
+    if !state.verify_admin_token(provided) {
         return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("unauthorized"))).into_response();
     }
 
@@ -2669,13 +2664,12 @@ async fn admin_fees_handler(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let expected = std::env::var("ADMIN_TOKEN").expect("ADMIN_TOKEN env var must be set; refusing to boot with a hardcoded default");
     let provided = headers
         .get("x-admin-token")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if provided != expected {
+    if !state.verify_admin_token(provided) {
         return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<()>::err("unauthorized"))).into_response();
     }
 
