@@ -247,6 +247,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/points/:address", get(get_points_handler))
         .route("/portfolio/:address", get(get_portfolio_handler))
         .route("/portfolio/:address/csv", get(get_portfolio_csv_handler))
+        .route(
+            "/admin/export/trades/yesterday",
+            post(admin_export_trades_yesterday),
+        )
+        .route("/admin/export/l2/now", post(admin_export_l2_now))
         .route("/anchors", get(get_anchors))
         .route("/incidents", get(get_incidents))
         .route("/admin/incidents", post(create_incident))
@@ -4049,6 +4054,92 @@ async fn analytics_market_handler(
 ) -> impl IntoResponse {
     let tf = query.timeframe.as_deref().unwrap_or("24H");
     Json(build_analytics_data(Some(&market_id), tf, &state).await)
+}
+
+async fn admin_export_trades_yesterday(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let provided = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !state.verify_admin_token(provided) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("unauthorized")),
+        )
+            .into_response();
+    }
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let ms_into_day = now_ms % 86_400_000;
+    let start_of_today = now_ms - ms_into_day;
+    let start_of_yesterday = start_of_today - 86_400_000;
+
+    match crate::historical::dump_trades_for_day(
+        Arc::clone(&state),
+        start_of_yesterday,
+        start_of_today,
+    )
+    .await
+    {
+        Ok((files, rows)) => (
+            StatusCode::OK,
+            Json(ApiResponse::ok(serde_json::json!({
+                "files": files,
+                "rows": rows,
+                "from_ms": start_of_yesterday,
+                "to_ms": start_of_today,
+            }))),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::err(e.to_string())),
+        )
+            .into_response(),
+    }
+}
+
+async fn admin_export_l2_now(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let provided = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !state.verify_admin_token(provided) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("unauthorized")),
+        )
+            .into_response();
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    match crate::historical::dump_l2_snapshots(Arc::clone(&state), now_ms).await {
+        Ok(count) => (
+            StatusCode::OK,
+            Json(ApiResponse::ok(serde_json::json!({
+                "markets": count,
+                "timestamp_ms": now_ms,
+            }))),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::err(e.to_string())),
+        )
+            .into_response(),
+    }
 }
 
 async fn admin_fees_handler(

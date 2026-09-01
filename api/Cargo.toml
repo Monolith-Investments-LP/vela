@@ -39,6 +39,7 @@ crc = "3"
 rmp-serde = "1"
 subtle = "2"
 mimalloc = { version = "0.1", default-features = false }
+flate2 = "1"
 
 [dev-dependencies]
 axum-test = { version = "15", features = ["ws"] }

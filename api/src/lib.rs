@@ -4,6 +4,7 @@ pub mod committee_handler;
 pub mod da;
 pub mod feeds;
 pub mod handler;
+pub mod historical;
 pub mod mm;
 pub mod pyth;
 pub mod rate_limit;
@@ -264,6 +265,7 @@ impl AppState {
             pending_encrypted,
             Arc::clone(&state),
         ));
+        tokio::spawn(historical::run_export_task(Arc::clone(&state)));
 
         state
     }
