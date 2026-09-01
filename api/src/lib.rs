@@ -271,6 +271,7 @@ impl AppState {
             Arc::clone(&state),
         ));
         tokio::spawn(historical::run_export_task(Arc::clone(&state)));
+        tokio::spawn(handler::run_fee_tier_task(Arc::clone(&state)));
 
         state
     }

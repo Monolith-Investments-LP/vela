@@ -101,6 +101,7 @@ impl MatchingEngine {
                 ref_by: None,
                 ref_earnings: 0,
                 referred_users: vec![],
+                fee_tier: 0,
             })
     }
 
@@ -540,8 +541,27 @@ impl MatchingEngine {
                 let fill_qty = taker_remaining.min(resting_remaining);
                 let fill_notional = CreditSystem::compute_notional(fill_price, fill_qty);
 
-                let taker_fee = (fill_notional as i64 * market.taker_fee_bps) / 10_000;
-                let maker_fee = (fill_notional as i64 * market.maker_fee_bps) / 10_000;
+                // Fee tier lookup: each party's cached `fee_tier` on
+                // UserMetadata selects rebate/fee bps from the tier
+                // schedule. Tier 0 = market defaults (backwards-compat).
+                // The maker's tier applies to maker_fee only, and the
+                // taker's tier to taker_fee only, so both sides get the
+                // benefit of their own volume tier independently.
+                let taker_meta_for_fee = delta.get_metadata(&order.user, meta_base);
+                let maker_meta_for_fee = delta.get_metadata(&resting.user, meta_base);
+                let (maker_bps, _) = if maker_meta_for_fee.fee_tier == 0 {
+                    (market.maker_fee_bps, market.taker_fee_bps)
+                } else {
+                    types::fee_tiers::fees_for_tier(maker_meta_for_fee.fee_tier)
+                };
+                let (_, taker_bps) = if taker_meta_for_fee.fee_tier == 0 {
+                    (market.maker_fee_bps, market.taker_fee_bps)
+                } else {
+                    types::fee_tiers::fees_for_tier(taker_meta_for_fee.fee_tier)
+                };
+
+                let taker_fee = (fill_notional as i64 * taker_bps) / 10_000;
+                let maker_fee = (fill_notional as i64 * maker_bps) / 10_000;
 
                 let fill = Fill {
                     maker_order_id: resting.id,

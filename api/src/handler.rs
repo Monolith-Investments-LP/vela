@@ -211,6 +211,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/metrics", get(metrics_handler))
         .route("/status", get(status_handler))
         .route("/fees/public", get(fees_public_handler))
+        .route("/fees/schedule", get(fees_schedule_handler))
+        .route("/fees/tier/:address", get(fees_tier_handler))
         .route("/markets", get(list_markets))
         .route("/markets/:market/book", get(get_book))
         .route("/account/:address/balances", get(get_balances))
@@ -2839,6 +2841,7 @@ fn default_user_metadata(user: &UserId) -> UserMetadata {
         ref_by: None,
         ref_earnings: 0,
         referred_users: vec![],
+        fee_tier: 0,
     }
 }
 
@@ -3035,6 +3038,151 @@ async fn status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
         "connected_ws_clients": ws_clients,
         "last_restart_reason": restart_reason,
     })))
+}
+
+// ---------------------------------------------------------------------------
+// Volume-tiered maker rebate program.
+//
+// User's 30-day USDC volume selects a tier; tier maps to maker+taker bps
+// via `types::fee_tiers`. The tier is cached on `UserMetadata.fee_tier` so
+// the matching engine reads it in O(1) at fill time. The recompute task
+// below runs hourly and rewrites tiers from the last 30d of state.fills.
+// ---------------------------------------------------------------------------
+
+/// Sum a user's 30d fills as USDC micro (fixed-point 1e6). Counts both
+/// maker and taker sides.
+async fn user_30d_volume_micro(state: &AppState, address_lower: &str, now_ms: u64) -> u64 {
+    let cutoff = now_ms.saturating_sub(30 * 24 * 60 * 60 * 1_000);
+    let fills = state.fills.lock().await;
+    fills
+        .iter()
+        .filter(|f| f.timestamp >= cutoff)
+        .filter(|f| {
+            f.maker_address.to_ascii_lowercase() == address_lower
+                || f.taker_address.to_ascii_lowercase() == address_lower
+        })
+        .map(|f| (f.price as u128 * f.quantity as u128 / 1_000_000u128) as u64)
+        .sum()
+}
+
+async fn fees_schedule_handler() -> impl IntoResponse {
+    let tiers: Vec<serde_json::Value> = (0..types::fee_tiers::TIER_COUNT)
+        .map(|i| {
+            let threshold = types::fee_tiers::THRESHOLDS_MICRO[i];
+            serde_json::json!({
+                "tier": i,
+                "min_30d_volume_usdc": format!("{:.2}", threshold as f64 / 1_000_000.0),
+                "maker_bps": types::fee_tiers::MAKER_BPS[i],
+                "taker_bps": types::fee_tiers::TAKER_BPS[i],
+            })
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "window_days": 30,
+            "tiers": tiers,
+            "notes": "Maker bps negative = rebate. Tier applies per-user; maker and taker of the same fill can be in different tiers.",
+        }))),
+    )
+        .into_response()
+}
+
+async fn fees_tier_handler(
+    Path(address): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let addr = address.to_ascii_lowercase();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let volume_micro = user_30d_volume_micro(&state, &addr, now_ms).await;
+    let tier = types::fee_tiers::tier_for_volume(volume_micro);
+    let (maker_bps, taker_bps) = types::fee_tiers::fees_for_tier(tier);
+
+    // Cached tier from user metadata (what the matcher is actually using).
+    let cached_tier = if let Ok(uid) = UserId::from_hex(&addr) {
+        let us = state.shards.user_state.read().await;
+        us.metadata.get(&uid).map(|m| m.fee_tier).unwrap_or(0)
+    } else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err("invalid address")),
+        )
+            .into_response();
+    };
+
+    let next_threshold = if (tier as usize) + 1 < types::fee_tiers::TIER_COUNT {
+        Some(types::fee_tiers::THRESHOLDS_MICRO[tier as usize + 1])
+    } else {
+        None
+    };
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "address": addr,
+            "computed_tier": tier,
+            "cached_tier": cached_tier,
+            "volume_30d_usdc": format!("{:.2}", volume_micro as f64 / 1_000_000.0),
+            "maker_bps": maker_bps,
+            "taker_bps": taker_bps,
+            "next_tier_threshold_usdc": next_threshold.map(|v| format!("{:.2}", v as f64 / 1_000_000.0)),
+            "note": "computed_tier is what your volume qualifies for now; cached_tier is what the engine applied at last recompute (hourly).",
+        }))),
+    )
+        .into_response()
+}
+
+/// Long-running task: every hour, walk all users with recorded fills
+/// and update their `UserMetadata.fee_tier` to match their 30d volume.
+/// Runs against `state.shards.user_state` so both the main engine and
+/// the shard engines see the same tier through the phase-3 fold.
+pub async fn run_fee_tier_task(state: Arc<AppState>) {
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+    ticker.tick().await; // Skip immediate first tick.
+
+    loop {
+        ticker.tick().await;
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        // Collect unique addresses that appeared in any recent fill.
+        let addresses: std::collections::HashSet<String> = {
+            let fills = state.fills.lock().await;
+            fills
+                .iter()
+                .flat_map(|f| {
+                    [
+                        f.maker_address.to_ascii_lowercase(),
+                        f.taker_address.to_ascii_lowercase(),
+                    ]
+                })
+                .collect()
+        };
+
+        let mut updates = 0usize;
+        for addr in addresses {
+            let volume_micro = user_30d_volume_micro(&state, &addr, now_ms).await;
+            let new_tier = types::fee_tiers::tier_for_volume(volume_micro);
+            let uid = match UserId::from_hex(&addr) {
+                Ok(u) => u,
+                Err(_) => continue,
+            };
+            let mut us = state.shards.user_state.write().await;
+            if let Some(meta) = us.metadata.get_mut(&uid) {
+                if meta.fee_tier != new_tier {
+                    meta.fee_tier = new_tier;
+                    updates += 1;
+                }
+            }
+        }
+        tracing::info!("fee-tier recompute: updated {} users", updates);
+    }
 }
 
 async fn fees_public_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {

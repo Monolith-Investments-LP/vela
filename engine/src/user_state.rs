@@ -66,6 +66,7 @@ impl UserState {
                 ref_by: None,
                 ref_earnings: 0,
                 referred_users: vec![],
+                fee_tier: 0,
             })
     }
 
@@ -103,6 +104,7 @@ impl UserState {
                 ref_by: None,
                 ref_earnings: 0,
                 referred_users: vec![],
+                fee_tier: 0,
             });
         // Check nonce would be accepted (non-destructive read)
         // We simulate by cloning and trying to accept
@@ -375,6 +377,7 @@ impl UserState {
                     ref_by: None,
                     ref_earnings: 0,
                     referred_users: vec![],
+                    fee_tier: 0,
                 });
 
             let current = self
@@ -523,6 +526,7 @@ mod tests {
             ref_by: None,
             ref_earnings: 0,
             referred_users: vec![],
+            fee_tier: 0,
         }
     }
 

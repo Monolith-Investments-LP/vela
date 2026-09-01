@@ -1173,6 +1173,7 @@ fn test_nonce_window_snapshot_restore() {
         ref_by: None,
         ref_earnings: 0,
         referred_users: vec![],
+        fee_tier: 0,
     };
 
     let json = serde_json::to_string(&meta).unwrap();

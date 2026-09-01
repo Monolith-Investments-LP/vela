@@ -425,6 +425,58 @@ pub struct UserMetadata {
     pub ref_earnings: u64,
     #[serde(default)]
     pub referred_users: Vec<String>,
+    /// Volume-based fee tier (0 = default, higher = better rebates).
+    /// Recomputed periodically by the api layer from a rolling 30-day
+    /// volume window and cached here so the hot-path fee application
+    /// stays O(1). See `types::fee_tiers` for the schedule.
+    #[serde(default)]
+    pub fee_tier: u8,
+}
+
+/// Volume-based fee tier schedule.
+///
+/// Applied by the matching engine at fill time in place of
+/// `market.maker_fee_bps` / `market.taker_fee_bps` when the user's
+/// cached `fee_tier` is non-zero. Tier 0 is unchanged from the
+/// market defaults so pre-tier users keep seeing the same fees.
+///
+/// Thresholds are 30-day USDC volume in fixed-point 1e6 (so
+/// 10_000_000 * 1_000_000 = 10M USDC).
+pub mod fee_tiers {
+    pub const TIER_COUNT: usize = 4;
+
+    /// Minimum 30-day USDC volume (× 1e6) required for each tier.
+    pub const THRESHOLDS_MICRO: [u64; TIER_COUNT] = [
+        0,
+        10_000_000_000_000,    // 10M USDC
+        100_000_000_000_000,   // 100M USDC
+        1_000_000_000_000_000, // 1B USDC
+    ];
+
+    /// Maker fee in basis points per tier. Negative = rebate.
+    pub const MAKER_BPS: [i64; TIER_COUNT] = [-1, -2, -3, -4];
+
+    /// Taker fee in basis points per tier.
+    pub const TAKER_BPS: [i64; TIER_COUNT] = [5, 4, 3, 2];
+
+    /// Look up the tier index for a 30-day volume, saturating at the
+    /// highest tier the volume qualifies for.
+    pub fn tier_for_volume(volume_micro: u64) -> u8 {
+        let mut tier = 0u8;
+        for (i, threshold) in THRESHOLDS_MICRO.iter().enumerate() {
+            if volume_micro >= *threshold {
+                tier = i as u8;
+            }
+        }
+        tier
+    }
+
+    /// (maker_bps, taker_bps) for a tier, saturating at the top tier
+    /// if a corrupt-high value comes back from storage.
+    pub fn fees_for_tier(tier: u8) -> (i64, i64) {
+        let idx = (tier as usize).min(TIER_COUNT - 1);
+        (MAKER_BPS[idx], TAKER_BPS[idx])
+    }
 }
 
 impl UserMetadata {
@@ -868,5 +920,54 @@ impl From<VelaError> for ErrorResponse {
             code,
             message: e.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod fee_tier_tests {
+    use super::fee_tiers::*;
+
+    #[test]
+    fn tier_zero_below_threshold() {
+        assert_eq!(tier_for_volume(0), 0);
+        assert_eq!(tier_for_volume(THRESHOLDS_MICRO[1] - 1), 0);
+    }
+
+    #[test]
+    fn tier_boundaries() {
+        assert_eq!(tier_for_volume(THRESHOLDS_MICRO[1]), 1);
+        assert_eq!(tier_for_volume(THRESHOLDS_MICRO[2]), 2);
+        assert_eq!(tier_for_volume(THRESHOLDS_MICRO[3]), 3);
+    }
+
+    #[test]
+    fn tier_saturates_at_top() {
+        assert_eq!(tier_for_volume(u64::MAX), (TIER_COUNT - 1) as u8);
+    }
+
+    #[test]
+    fn tier_fees_monotonic() {
+        // Maker rebate strictly increases with tier (more negative bps).
+        for i in 1..TIER_COUNT {
+            assert!(
+                MAKER_BPS[i] < MAKER_BPS[i - 1],
+                "maker rebate must improve with tier"
+            );
+            assert!(
+                TAKER_BPS[i] < TAKER_BPS[i - 1],
+                "taker fee must decrease with tier"
+            );
+        }
+    }
+
+    #[test]
+    fn fees_for_tier_clamps_out_of_range() {
+        let (mb0, tb0) = fees_for_tier(0);
+        assert_eq!(mb0, MAKER_BPS[0]);
+        assert_eq!(tb0, TAKER_BPS[0]);
+        // Corrupt-high tier value clamps to top tier, doesn't panic.
+        let (mb_top, tb_top) = fees_for_tier(255);
+        assert_eq!(mb_top, MAKER_BPS[TIER_COUNT - 1]);
+        assert_eq!(tb_top, TAKER_BPS[TIER_COUNT - 1]);
     }
 }

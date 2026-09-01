@@ -141,6 +141,7 @@ impl DeltaBuffer {
                 ref_by: None,
                 ref_earnings: 0,
                 referred_users: vec![],
+                fee_tier: 0,
             })
     }
 
