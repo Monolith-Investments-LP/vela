@@ -152,6 +152,23 @@ fn dispatch_timeout() -> std::time::Duration {
     std::time::Duration::from_millis(ms)
 }
 
+/// IEX-style speed bump: an artificial delay applied only to marketable
+/// (crossing) orders. Resting orders and cancels are not delayed. The
+/// intent is to let maker quote-cancels win the race against an
+/// incoming taker, which reduces stale-quote sniping without hurting
+/// resting-order latency.
+///
+/// Default 0 (disabled). Overridable via `VELA_SPEED_BUMP_US` at boot.
+/// Tokio's async `sleep` is scheduler-dependent and inaccurate below
+/// ~1 ms in practice; treat this as a soft delay, not a hardware timer.
+fn speed_bump_duration() -> std::time::Duration {
+    let us: u64 = std::env::var("VELA_SPEED_BUMP_US")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    std::time::Duration::from_micros(us)
+}
+
 fn parse_hex_address(s: &str) -> Result<[u8; 20], String> {
     let trimmed = s.strip_prefix("0x").unwrap_or(s);
     let bytes = hex::decode(trimmed).map_err(|_| format!("invalid hex address: {s}"))?;
@@ -716,7 +733,9 @@ async fn post_order(
         .unwrap_or_default()
         .as_micros() as u64;
 
-    {
+    // Combine market-existence check with the would-cross probe for the
+    // speed bump so we only take the engine lock once here.
+    let is_marketable = {
         let engine = state.engine.lock().await;
         if !engine.markets.contains_key(&req.market) {
             return (
@@ -725,6 +744,23 @@ async fn post_order(
             )
                 .into_response();
         }
+        // Post-Only orders are rejected on cross by the matcher, so
+        // don't waste a delay bumping them just to reject after.
+        if req.order_type == types::OrderType::PostOnly {
+            false
+        } else {
+            engine
+                .order_books
+                .get(&req.market)
+                .map(|b| b.would_match(req.side, req.price))
+                .unwrap_or(false)
+        }
+    };
+
+    // IEX-style speed bump: delay only crossing orders, not resting ones.
+    let bump = speed_bump_duration();
+    if is_marketable && !bump.is_zero() {
+        tokio::time::sleep(bump).await;
     }
 
     let (responder, resp_rx) = tokio::sync::oneshot::channel();
