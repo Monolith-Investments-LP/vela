@@ -257,6 +257,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/agents/register", post(agents_register))
         .route("/agents/revoke", post(agents_revoke))
         .route("/agents/:master", get(agents_list))
+        .route("/orders/algo/twap", post(post_twap_algo))
+        .route("/orders/algo/cancel", post(cancel_algo))
+        .route("/orders/algo/:parent_id", get(get_algo_status))
         .route("/anchors", get(get_anchors))
         .route("/incidents", get(get_incidents))
         .route("/admin/incidents", post(create_incident))
@@ -3343,6 +3346,238 @@ async fn get_points_handler(
         }))),
     )
         .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Server-side execution algos (TWAP for now; more to follow).
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct TwapAlgoBody {
+    address: String,
+    market: String,
+    side: types::OrderSide,
+    /// Total base-asset quantity to work, fixed-point 1e6.
+    quantity: u64,
+    /// How long to spread execution over.
+    duration_secs: u64,
+    /// Optional worst-price bound (fixed-point 1e6). Slices execute IOC
+    /// against this bound; miss on any slice is left unfilled.
+    #[serde(default)]
+    price_limit: Option<u64>,
+    /// Number of equal slices. Defaults to 12. Capped at 240 to avoid
+    /// pathological configurations that saturate the child-order path.
+    #[serde(default)]
+    slices: Option<u32>,
+    /// Nonce for the delegation signature that authorizes this algo run.
+    /// The client signs `vela:algo:twap:{market}:{qty}:{duration}:{nonce}`
+    /// with their master or an authorized agent key.
+    nonce: u64,
+    signature: String,
+}
+
+fn twap_signing_message(market: &str, quantity: u64, duration_secs: u64, nonce: u64) -> Vec<u8> {
+    format!(
+        "vela:algo:twap:{}:{}:{}:{}",
+        market, quantity, duration_secs, nonce
+    )
+    .into_bytes()
+}
+
+async fn post_twap_algo(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<TwapAlgoBody>,
+) -> impl IntoResponse {
+    let user = match UserId::from_hex(&body.address) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("invalid address")),
+            )
+                .into_response()
+        }
+    };
+    if body.quantity == 0 || body.duration_secs == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err(
+                "quantity and duration_secs must be > 0",
+            )),
+        )
+            .into_response();
+    }
+    let slices = body.slices.unwrap_or(12).clamp(1, 240);
+    if body.quantity < slices as u64 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err(
+                "quantity must be >= slices (need at least 1 unit per slice)",
+            )),
+        )
+            .into_response();
+    }
+
+    // Authorize via master-or-agent signature. TWAP counts as a single
+    // authorization event; individual child orders bypass sig verify
+    // (they're synthesized internally and inherit this authorization).
+    // Notional cap enforced against total quantity.
+    let notional_micro = match body.side {
+        types::OrderSide::Bid => body
+            .price_limit
+            .and_then(|p| p.checked_mul(body.quantity))
+            .map(|n| n / 1_000_000)
+            .unwrap_or(u64::MAX),
+        types::OrderSide::Ask => body.quantity,
+    };
+    let msg = twap_signing_message(&body.market, body.quantity, body.duration_secs, body.nonce);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    if crate::agents::verify_master_or_agent_async(
+        msg,
+        body.signature.clone(),
+        body.address.clone(),
+        notional_micro,
+        now_ms,
+        Arc::clone(&state.agents),
+    )
+    .await
+    .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("invalid signature")),
+        )
+            .into_response();
+    }
+
+    // Reserve a nonce block for child orders — starts one above the
+    // client's supplied nonce so master↔child nonces don't collide.
+    let parent_id = crate::algos::next_parent_id();
+    let parent = std::sync::Arc::new(crate::algos::TwapParent {
+        parent_id,
+        user_address: body.address.to_lowercase(),
+        market: body.market.clone(),
+        side: body.side,
+        total_quantity: body.quantity,
+        filled_quantity: std::sync::atomic::AtomicU64::new(0),
+        price_limit: body.price_limit,
+        duration_secs: body.duration_secs,
+        slices,
+        started_at_ms: now_ms,
+        status: std::sync::Mutex::new(crate::algos::AlgoStatus::Running),
+        cancel_flag: std::sync::atomic::AtomicBool::new(false),
+        child_nonce_base: body.nonce.saturating_add(1),
+        _phantom_signature: (),
+    });
+
+    state
+        .algos
+        .insert(parent_id, std::sync::Arc::clone(&parent));
+    tokio::spawn(crate::algos::run_twap_task(
+        Arc::clone(&state),
+        std::sync::Arc::clone(&parent),
+    ));
+
+    let snapshot = crate::algos::TwapParentSnapshot::from(&parent);
+    let user_hex = user.to_hex();
+    let _ = user_hex;
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "parent_id": parent_id,
+            "status": snapshot.status,
+            "slice_count": snapshot.slices,
+            "note": "TWAP running; poll GET /orders/algo/{parent_id} for progress.",
+        }))),
+    )
+        .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct CancelAlgoBody {
+    parent_id: u64,
+    address: String,
+    /// Signature over `vela:algo:cancel:{parent_id}:{nonce}` by master
+    /// or agent.
+    nonce: u64,
+    signature: String,
+}
+
+async fn cancel_algo(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CancelAlgoBody>,
+) -> impl IntoResponse {
+    let parent = match state.algos.get(&body.parent_id) {
+        Some(p) => Arc::clone(&*p),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::<()>::err("parent_id not found")),
+            )
+                .into_response()
+        }
+    };
+    if parent.user_address != body.address.to_lowercase() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()>::err("not the owner of this algo")),
+        )
+            .into_response();
+    }
+    let msg = format!("vela:algo:cancel:{}:{}", body.parent_id, body.nonce);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    if crate::agents::verify_master_or_agent_async(
+        msg.into_bytes(),
+        body.signature.clone(),
+        body.address.clone(),
+        0,
+        now_ms,
+        Arc::clone(&state.agents),
+    )
+    .await
+    .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::err("invalid signature")),
+        )
+            .into_response();
+    }
+
+    parent
+        .cancel_flag
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(serde_json::json!({
+            "parent_id": body.parent_id,
+            "canceled": true,
+        }))),
+    )
+        .into_response()
+}
+
+async fn get_algo_status(
+    Path(parent_id): Path<u64>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    match state.algos.get(&parent_id) {
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()>::err("parent_id not found")),
+        )
+            .into_response(),
+        Some(p) => {
+            let snap = crate::algos::TwapParentSnapshot::from(&p);
+            (StatusCode::OK, Json(ApiResponse::ok(snap))).into_response()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

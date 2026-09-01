@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod algos;
 pub mod anchor;
 pub mod auth;
 pub mod committee_handler;
@@ -89,6 +90,8 @@ pub struct AppState {
     /// Session-key / agent-wallet registry. Master wallets delegate to
     /// ephemeral agents so users skip personal_sign on every order.
     pub agents: Arc<crate::agents::AgentRegistry>,
+    /// Active server-side algo parents (TWAP, etc). Keyed by parent_id.
+    pub algos: crate::algos::AlgoRegistry,
     /// Admin bearer token — read from ADMIN_TOKEN at boot and used in
     /// constant-time comparisons via `AppState::verify_admin_token`.
     admin_token: String,
@@ -253,6 +256,7 @@ impl AppState {
             decryption_proofs: Arc::new(Mutex::new(Vec::new())),
             batch_metrics: Arc::clone(&batch_metrics),
             agents: crate::agents::AgentRegistry::new(),
+            algos: std::sync::Arc::new(dashmap::DashMap::new()),
             admin_token,
         });
 
