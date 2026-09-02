@@ -353,19 +353,103 @@ impl ZkVerifier for Sp1Verifier {
     }
 }
 
-/// Factory: picks a prover implementation from env. `VELA_PROVER` set
-/// to `"placeholder"` (default), `"sp1"`, or unspecified.
+/// Which prover backend the process should use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProverKind {
+    Placeholder,
+    Sp1,
+}
+
+fn is_prod() -> bool {
+    std::env::var("ENVIRONMENT")
+        .map(|v| v.eq_ignore_ascii_case("production"))
+        .unwrap_or(false)
+}
+
+/// Read the requested backend from env. `ZKVM_PROVIDER` is preferred;
+/// `VELA_PROVER` is accepted as a legacy alias.
+pub fn provider_from_env() -> ProverKind {
+    let raw = std::env::var("ZKVM_PROVIDER")
+        .ok()
+        .or_else(|| std::env::var("VELA_PROVER").ok())
+        .unwrap_or_else(|| "placeholder".to_string());
+    match raw.to_ascii_lowercase().as_str() {
+        "sp1" => ProverKind::Sp1,
+        "placeholder" | "" => ProverKind::Placeholder,
+        other => panic!(
+            "unknown ZKVM_PROVIDER={other:?}; expected \"placeholder\" or \"sp1\""
+        ),
+    }
+}
+
+/// Factory: picks a prover implementation from env and fails closed on
+/// `ENVIRONMENT=production` when the requested provider isn't fully
+/// wired. Selection happens once at boot so the running process has a
+/// stable, observable provider label (`vela_verifiability_provider`).
 pub fn prover_from_env() -> std::sync::Arc<dyn ZkProver> {
-    match std::env::var("VELA_PROVER").ok().as_deref() {
-        Some("sp1") => std::sync::Arc::new(Sp1Prover::from_env()),
-        _ => std::sync::Arc::new(PlaceholderProver),
+    let kind = provider_from_env();
+    let prod = is_prod();
+    match kind {
+        ProverKind::Placeholder => {
+            if prod {
+                panic!(
+                    "ENVIRONMENT=production forbids ZKVM_PROVIDER=placeholder — placeholder \
+                     proofs are not real proofs. Set ZKVM_PROVIDER=sp1 with \
+                     VELA_SP1_PROVER_URL, or unset ENVIRONMENT for staging."
+                );
+            }
+            std::sync::Arc::new(PlaceholderProver)
+        }
+        ProverKind::Sp1 => {
+            let has_url = std::env::var("VELA_SP1_PROVER_URL")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .is_some();
+            if prod && !has_url {
+                panic!(
+                    "ENVIRONMENT=production with ZKVM_PROVIDER=sp1 requires \
+                     VELA_SP1_PROVER_URL set to a real Succinct Prover Network endpoint; \
+                     refusing to boot with the sp1-mock fallback."
+                );
+            }
+            #[cfg(not(feature = "sp1-prover"))]
+            if prod {
+                panic!(
+                    "ENVIRONMENT=production with ZKVM_PROVIDER=sp1 requires the api binary \
+                     to be built with `--features sp1-prover`. The current binary can only \
+                     emit mock proofs."
+                );
+            }
+            std::sync::Arc::new(Sp1Prover::from_env())
+        }
     }
 }
 
 pub fn verifier_from_env() -> std::sync::Arc<dyn ZkVerifier> {
-    match std::env::var("VELA_PROVER").ok().as_deref() {
-        Some("sp1") => std::sync::Arc::new(Sp1Verifier::from_env()),
-        _ => std::sync::Arc::new(PlaceholderVerifier),
+    let kind = provider_from_env();
+    let prod = is_prod();
+    match kind {
+        ProverKind::Placeholder => {
+            if prod {
+                panic!(
+                    "ENVIRONMENT=production forbids ZKVM_PROVIDER=placeholder verifier."
+                );
+            }
+            std::sync::Arc::new(PlaceholderVerifier)
+        }
+        ProverKind::Sp1 => {
+            let has_url = std::env::var("VELA_SP1_VERIFIER_URL")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .is_some();
+            if prod && !has_url {
+                panic!(
+                    "ENVIRONMENT=production with ZKVM_PROVIDER=sp1 requires \
+                     VELA_SP1_VERIFIER_URL set."
+                );
+            }
+            std::sync::Arc::new(Sp1Verifier::from_env())
+        }
     }
 }
 

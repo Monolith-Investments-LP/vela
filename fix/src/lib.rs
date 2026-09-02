@@ -54,6 +54,7 @@ pub mod tag {
     pub const RESET_SEQ_NUM_FLAG: u16 = 141;
 
     // Order fields
+    pub const ACCOUNT: u16 = 1;
     pub const CL_ORD_ID: u16 = 11;
     pub const ORIG_CL_ORD_ID: u16 = 41;
     pub const ORDER_ID: u16 = 37;

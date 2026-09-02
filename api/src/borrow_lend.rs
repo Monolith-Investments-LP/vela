@@ -33,10 +33,17 @@
 //!   borrower's borrow and seizes collateral at
 //!   price × (1 + liquidation_bonus_bps), default 500 bps (5%).
 //!
+//! Prices
+//! ------
+//! `MarketState::price_micro_usdc` is refreshed from
+//! `crate::oracle::PriceOracle` on every `accrue_market` call. Under a
+//! Pyth outage the last-known price is deliberately kept in place — a
+//! zeroed price would liquidate every open position, which is much
+//! worse than trading briefly on a stale mark. Operators watch
+//! `oracle.stale_reads` / `oracle.missing_reads` via `/metrics`.
+//!
 //! Not in v1
 //! ---------
-//! - Cross-asset oracle wiring (v1 uses a stub `mid_price_micro_usdc`
-//!   lookup — real Pyth wiring reuses the perp oracle work).
 //! - Interest paid to LPs in real time to the LP (v1 accrues, LP
 //!   claims on withdraw).
 //! - Isolated / e-mode collateral (Aave-style) — one pool per asset,
@@ -115,8 +122,9 @@ pub struct MarketState {
     pub last_accrual_ms: u64,
     /// Reserve pool: interest retained by protocol, in native units.
     pub reserves: u128,
-    /// Latest observed mid-price in micro-USDC. Stub oracle; real
-    /// wiring is Pyth via the perp oracle work.
+    /// Latest observed mid-price in micro-USDC. Refreshed from
+    /// `crate::oracle::PriceOracle` on every accrue; falls back to the
+    /// last observation when the oracle is stale/missing.
     pub price_micro_usdc: u128,
 }
 
@@ -152,6 +160,10 @@ pub struct BorrowLendRegistry {
     pub markets: DashMap<String, MarketState>,
     /// (user_lower, asset) → position
     pub positions: DashMap<(String, String), UserPosition>,
+    /// Optional oracle handle. When wired, `refresh_prices_from_oracle`
+    /// pulls each market's mark price before accrual. Left None in unit
+    /// tests that construct a registry directly.
+    oracle: Option<Arc<crate::oracle::PriceOracle>>,
 }
 
 impl BorrowLendRegistry {
@@ -159,12 +171,25 @@ impl BorrowLendRegistry {
         Arc::new(Self {
             markets: DashMap::new(),
             positions: DashMap::new(),
+            oracle: None,
+        })
+    }
+
+    /// Constructor used by `AppState::new` — keeps a handle to the
+    /// process-wide price oracle so every accrue can refresh prices.
+    pub fn with_oracle(oracle: Arc<crate::oracle::PriceOracle>) -> Arc<Self> {
+        Arc::new(Self {
+            markets: DashMap::new(),
+            positions: DashMap::new(),
+            oracle: Some(oracle),
         })
     }
 
     pub fn seed_defaults(self: &Arc<Self>) {
-        // Two v1 markets: USDC and ETH.  USDC price = 1e6 (par).
-        // ETH stub at $3000 = 3_000_000_000 micro-USDC.
+        // Cold-start seed prices — used only until the first oracle
+        // observation lands (typically < 1s after boot when Pyth is
+        // enabled). USDC stays at par because Pyth doesn't feed
+        // stable→USD.
         self.markets.insert(
             "USDC".to_string(),
             MarketState::new(MarketConfig::default_for("USDC"), 1_000_000),
@@ -173,6 +198,24 @@ impl BorrowLendRegistry {
             "ETH".to_string(),
             MarketState::new(MarketConfig::default_for("ETH"), 3_000_000_000),
         );
+        // Pull any prices already resident in the oracle cache.
+        self.refresh_prices_from_oracle();
+    }
+
+    /// Pull the freshest price for each market from the oracle. If the
+    /// oracle handle is unset (unit tests) or a market's price is
+    /// stale/missing, the previous `price_micro_usdc` is preserved.
+    pub fn refresh_prices_from_oracle(&self) {
+        let oracle = match &self.oracle {
+            Some(o) => o,
+            None => return,
+        };
+        for mut entry in self.markets.iter_mut() {
+            let asset = entry.key().clone();
+            if let Some(px) = oracle.price(&asset) {
+                entry.value_mut().price_micro_usdc = px;
+            }
+        }
     }
 }
 
@@ -389,6 +432,10 @@ fn err_response(code: StatusCode, msg: impl Into<String>) -> axum::response::Res
 }
 
 async fn accrue_market(reg: &Arc<BorrowLendRegistry>, asset: &str) -> Option<()> {
+    // Refresh every market's mark price from the oracle before we
+    // accrue. Doing it here (rather than at each handler entry) keeps
+    // all borrow / withdraw / liquidate paths oracle-fed by default.
+    reg.refresh_prices_from_oracle();
     let mut entry = reg.markets.get_mut(asset)?;
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

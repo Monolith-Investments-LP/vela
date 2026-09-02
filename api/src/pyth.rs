@@ -127,6 +127,15 @@ pub async fn pyth_feed_task(state: Arc<AppState>) {
                             }
                         };
 
+                        // Publish the observation to the process-wide
+                        // oracle regardless of whether we emit synthetic
+                        // fills for it — borrow-lend / portfolio-margin
+                        // / perp mark-price rely on this being fresh.
+                        let mark_micro_usdc = (usd_price * 1_000_000.0).round() as u128;
+                        state
+                            .oracle
+                            .publish_from_market(market_id, mark_micro_usdc);
+
                         let prev = prev_prices.get(market_id).copied().unwrap_or(0.0);
                         // Only emit fills when price has moved by at least 0.001%.
                         if prev > 0.0 && (usd_price - prev).abs() / prev < 0.00001 {

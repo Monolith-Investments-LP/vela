@@ -14,6 +14,7 @@ pub mod committee_handler;
 pub mod credit;
 pub mod da;
 pub mod feeds;
+pub mod fix_adapter;
 pub mod fix_gateway;
 pub mod handler;
 pub mod historical;
@@ -21,6 +22,7 @@ pub mod listings;
 pub mod mcp;
 pub mod mm;
 pub mod openapi;
+pub mod oracle;
 pub mod perp_service;
 pub mod portfolio_margin;
 pub mod prompt_firewall;
@@ -142,9 +144,14 @@ pub struct AppState {
     /// subscriptions. Owner signs to publish, follower signs to
     /// subscribe; funds never leave follower custody.
     pub strategies: Arc<crate::strategies::StrategyRegistry>,
+    /// Process-wide price cache. Pyth Hermes v2 feeds it every ~1s;
+    /// borrow-lend / portfolio-margin / perp mark-price read from it
+    /// with a caller-selected staleness bound. Missing/stale reads are
+    /// counted for `/metrics` and Grafana alerting.
+    pub oracle: Arc<crate::oracle::PriceOracle>,
     /// Spot borrow-lend money market (Tier 4.6). Per-asset index
     /// accrual + per-user supply/borrow positions with health-factor
-    /// gating.
+    /// gating. Prices refreshed from `oracle` on every accrue.
     pub borrow_lend: Arc<crate::borrow_lend::BorrowLendRegistry>,
     /// Perp markets + positions (Tier 4.1). Matching-engine wiring
     /// is a follow-up; this registry owns position ledger + funding
@@ -224,12 +231,13 @@ impl AppState {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("/data/da"));
 
-        // Prover selection is env-driven so operators can flip
-        // placeholder → sp1 without rebuilding: `VELA_PROVER=sp1`,
-        // combined with `VELA_SP1_PROVER_URL` for the network path
-        // (falls back to `sp1-mock` if URL unset).
+        // Prover / attester selection is env-driven so operators can
+        // flip placeholder → sp1 (or → amd-sev-snp) without rebuilding.
+        // Both factories fail closed on ENVIRONMENT=production so a
+        // misconfigured mainnet boot refuses to start rather than
+        // silently emitting placeholder proofs / simulated attestations.
         let prover: Arc<dyn ZkProver> = zkvm::prover_from_env();
-        let attester: Arc<dyn TeeAttester> = Arc::new(tee::PlaceholderAttester::new());
+        let attester: Arc<dyn TeeAttester> = tee::attester_from_env();
 
         let (t, n) = committee::committee_config_from_env();
 
@@ -269,6 +277,8 @@ impl AppState {
         let threshold_decryptor = Arc::new(Mutex::new(committee::ThresholdDecryptor::new(t, n)));
 
         let batch_metrics = BatchMetrics::new();
+
+        let oracle = crate::oracle::PriceOracle::new();
 
         let admin_token = std::env::var("ADMIN_TOKEN")
             .expect("ADMIN_TOKEN env var must be set; refusing to boot with a hardcoded default");
@@ -327,8 +337,9 @@ impl AppState {
             reputation_cache: std::sync::Arc::new(dashmap::DashMap::new()),
             credit_lines: crate::credit::new_registry(),
             strategies: crate::strategies::StrategyRegistry::new(),
+            oracle: Arc::clone(&oracle),
             borrow_lend: {
-                let r = crate::borrow_lend::BorrowLendRegistry::new();
+                let r = crate::borrow_lend::BorrowLendRegistry::with_oracle(Arc::clone(&oracle));
                 r.seed_defaults();
                 r
             },
@@ -358,6 +369,9 @@ impl AppState {
         tokio::spawn(handler::run_fee_tier_task(Arc::clone(&state)));
         tokio::spawn(handler::run_listing_task(Arc::clone(&state)));
         tokio::spawn(credit::run_expiry_task(Arc::clone(&state)));
+        tokio::spawn(crate::perp_service::run_liquidation_watcher(Arc::clone(
+            &state,
+        )));
 
         // FIX 4.4 gateway: only spawn when explicitly configured
         // (VELA_FIX_BIND=host:port). Silent no-op otherwise.

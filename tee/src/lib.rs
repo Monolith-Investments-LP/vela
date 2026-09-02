@@ -158,6 +158,79 @@ impl TeeAttester for PlaceholderAttester {
     }
 }
 
+/// Which TEE platform this process should attest against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TeePlatformKind {
+    Placeholder,
+    AmdSevSnp,
+}
+
+fn is_prod() -> bool {
+    std::env::var("ENVIRONMENT")
+        .map(|v| v.eq_ignore_ascii_case("production"))
+        .unwrap_or(false)
+}
+
+/// Read the requested backend from env. Prefers `TEE_PLATFORM`; falls
+/// back to `placeholder`.
+pub fn platform_from_env() -> TeePlatformKind {
+    let raw = std::env::var("TEE_PLATFORM").unwrap_or_else(|_| "placeholder".to_string());
+    match raw.to_ascii_lowercase().as_str() {
+        "amd-sev-snp" | "sev-snp" | "sevsnp" => TeePlatformKind::AmdSevSnp,
+        "placeholder" | "" => TeePlatformKind::Placeholder,
+        other => panic!(
+            "unknown TEE_PLATFORM={other:?}; expected \"placeholder\" or \"amd-sev-snp\""
+        ),
+    }
+}
+
+/// Factory: build the attester the operator asked for. Fails closed on
+/// `ENVIRONMENT=production` when the placeholder is selected — the
+/// placeholder produces `Simulated` records, not attestations, and
+/// silently shipping those to a mainnet operator disclosure page is a
+/// misrepresentation.
+pub fn attester_from_env() -> std::sync::Arc<dyn TeeAttester> {
+    let kind = platform_from_env();
+    let prod = is_prod();
+    match kind {
+        TeePlatformKind::Placeholder => {
+            if prod {
+                panic!(
+                    "ENVIRONMENT=production forbids TEE_PLATFORM=placeholder — the placeholder \
+                     attester emits Simulated records, not attestations. Set \
+                     TEE_PLATFORM=amd-sev-snp on attested hardware, or unset ENVIRONMENT for \
+                     staging."
+                );
+            }
+            std::sync::Arc::new(PlaceholderAttester::new())
+        }
+        TeePlatformKind::AmdSevSnp => {
+            // Sanity check: the SEV-SNP path requires /dev/sev-guest. If
+            // it's not present we fail-closed rather than silently
+            // emitting `Failed` records.
+            if !std::path::Path::new("/dev/sev-guest").exists() {
+                if prod {
+                    panic!(
+                        "TEE_PLATFORM=amd-sev-snp requested but /dev/sev-guest is not present. \
+                         Boot the api binary inside an SEV-SNP-attested VM, or fall back to \
+                         TEE_PLATFORM=placeholder on a non-prod machine."
+                    );
+                } else {
+                    tracing::warn!(
+                        target: "tee",
+                        "TEE_PLATFORM=amd-sev-snp requested but /dev/sev-guest missing; \
+                         attestations will be marked Failed until this binary runs inside an \
+                         attested VM."
+                    );
+                }
+            }
+            std::sync::Arc::new(AmdSevSnpAttester {
+                binary_hash: PlaceholderAttester::new().binary_hash,
+            })
+        }
+    }
+}
+
 pub struct AmdSevSnpAttester {
     pub binary_hash: String,
 }

@@ -358,6 +358,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/perp/admin/mark",
             post(crate::perp_service::admin_mark_handler),
         )
+        .route(
+            "/perp/liquidatable",
+            get(crate::perp_service::liquidatable_handler),
+        )
+        .route(
+            "/perp/liquidate",
+            post(crate::perp_service::liquidate_handler),
+        )
         .route("/orders/algo/twap", post(post_twap_algo))
         .route("/orders/algo/cancel", post(cancel_algo))
         .route("/orders/algo/:parent_id", get(get_algo_status))
@@ -416,10 +424,12 @@ async fn health() -> &'static str {
 
 /// Prometheus text-format exposition of engine + api counters.
 ///
-/// Deliberately hand-rolled: the alternative is pulling in `prometheus`
-/// (heavy) or `metrics` + `metrics-exporter-prometheus` (two crates for
-/// a page of metrics). This function costs ~15 lines and has no runtime
-/// state.
+/// Deliberately hand-rolled: pulling in `prometheus` or
+/// `metrics` + `metrics-exporter-prometheus` for a page of counters
+/// would add two crates and a global registry to the trading engine.
+/// The text format is stable, well-documented, and cheap to emit
+/// directly — including histograms, which are just repeated
+/// `<name>_bucket{le="..."} <count>` lines.
 async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     use std::fmt::Write;
     use std::sync::atomic::Ordering;
@@ -431,7 +441,20 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
         (n, s)
     };
 
-    let mut out = String::with_capacity(1024);
+    // Cumulative-bucket counts for the batch_size histogram. Bucket
+    // boundaries mirror the max_batch_size default (256) with a coarse
+    // ladder — Grafana can pick whatever quantile it wants from these.
+    const BATCH_SIZE_BUCKETS: [u64; 9] = [1, 2, 4, 8, 16, 32, 64, 128, 256];
+    let mut batch_size_bucket_counts = [0u64; BATCH_SIZE_BUCKETS.len()];
+    for &size in &batch_size_hist {
+        for (i, &bound) in BATCH_SIZE_BUCKETS.iter().enumerate() {
+            if size <= bound {
+                batch_size_bucket_counts[i] += 1;
+            }
+        }
+    }
+
+    let mut out = String::with_capacity(2048);
 
     let _ = writeln!(
         out,
@@ -521,6 +544,27 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
     let _ = writeln!(out, "# TYPE vela_batch_size_sum_total counter");
     let _ = writeln!(out, "vela_batch_size_sum_total {}", batch_size_sum);
 
+    // Real Prometheus histogram for batch_size (cumulative buckets).
+    let _ = writeln!(
+        out,
+        "# HELP vela_batch_size Orders per dispatched batch (histogram since last drain)."
+    );
+    let _ = writeln!(out, "# TYPE vela_batch_size histogram");
+    for (i, &bound) in BATCH_SIZE_BUCKETS.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "vela_batch_size_bucket{{le=\"{}\"}} {}",
+            bound, batch_size_bucket_counts[i]
+        );
+    }
+    let _ = writeln!(
+        out,
+        "vela_batch_size_bucket{{le=\"+Inf\"}} {}",
+        batch_count
+    );
+    let _ = writeln!(out, "vela_batch_size_sum {}", batch_size_sum);
+    let _ = writeln!(out, "vela_batch_size_count {}", batch_count);
+
     let _ = writeln!(out, "# HELP vela_order_channel_send_failures_total Order-channel sends that failed (dispatcher gone).");
     let _ = writeln!(out, "# TYPE vela_order_channel_send_failures_total counter");
     let _ = writeln!(
@@ -538,6 +582,96 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
         out,
         "vela_feed_no_subscriber_drops_total {}",
         crate::feeds::FEED_NO_SUBSCRIBER_DROPS.load(Ordering::Relaxed)
+    );
+
+    // Oracle observability: stale / missing reads surface a Pyth outage
+    // before it turns into a liquidation cascade.
+    let _ = writeln!(
+        out,
+        "# HELP vela_oracle_stale_reads_total Price reads that fell outside the staleness window."
+    );
+    let _ = writeln!(out, "# TYPE vela_oracle_stale_reads_total counter");
+    let _ = writeln!(
+        out,
+        "vela_oracle_stale_reads_total {}",
+        state.oracle.stale_reads()
+    );
+    let _ = writeln!(
+        out,
+        "# HELP vela_oracle_missing_reads_total Price reads for assets not present in the cache."
+    );
+    let _ = writeln!(out, "# TYPE vela_oracle_missing_reads_total counter");
+    let _ = writeln!(
+        out,
+        "vela_oracle_missing_reads_total {}",
+        state.oracle.missing_reads()
+    );
+    let _ = writeln!(
+        out,
+        "# HELP vela_oracle_assets_cached Distinct asset symbols currently in the price cache."
+    );
+    let _ = writeln!(out, "# TYPE vela_oracle_assets_cached gauge");
+    let _ = writeln!(
+        out,
+        "vela_oracle_assets_cached {}",
+        state.oracle.snapshot().len()
+    );
+
+    // Fee flow (already tracked lifetime; expose so we can chart burn / rebate rates).
+    let _ = writeln!(
+        out,
+        "# HELP vela_taker_fees_collected_total_micro Lifetime taker fees collected (µUSDC)."
+    );
+    let _ = writeln!(out, "# TYPE vela_taker_fees_collected_total_micro counter");
+    let _ = writeln!(
+        out,
+        "vela_taker_fees_collected_total_micro {}",
+        state.total_taker_fees_collected.load(Ordering::Relaxed)
+    );
+    let _ = writeln!(
+        out,
+        "# HELP vela_maker_rebates_paid_total_micro Lifetime maker rebates paid (µUSDC)."
+    );
+    let _ = writeln!(out, "# TYPE vela_maker_rebates_paid_total_micro counter");
+    let _ = writeln!(
+        out,
+        "vela_maker_rebates_paid_total_micro {}",
+        state.total_maker_rebates_paid.load(Ordering::Relaxed)
+    );
+
+    // Perp liquidations (lifetime).
+    let _ = writeln!(
+        out,
+        "# HELP vela_perp_liquidations_total Successful perp liquidations (lifetime)."
+    );
+    let _ = writeln!(out, "# TYPE vela_perp_liquidations_total counter");
+    let _ = writeln!(
+        out,
+        "vela_perp_liquidations_total {}",
+        crate::perp_service::PERP_LIQUIDATIONS_TOTAL.load(Ordering::Relaxed)
+    );
+
+    // Verifiability posture: whether the running binary is emitting real
+    // proofs / real attestations, or the placeholders. Grafana can
+    // alert if either drops to "placeholder" in a prod deployment.
+    let zk_provider =
+        std::env::var("ZKVM_PROVIDER").unwrap_or_else(|_| "placeholder".to_string());
+    let tee_platform =
+        std::env::var("TEE_PLATFORM").unwrap_or_else(|_| "placeholder".to_string());
+    let _ = writeln!(
+        out,
+        "# HELP vela_verifiability_provider 1 if the given provider is active, 0 otherwise."
+    );
+    let _ = writeln!(out, "# TYPE vela_verifiability_provider gauge");
+    let _ = writeln!(
+        out,
+        "vela_verifiability_provider{{subsystem=\"zkvm\",provider=\"{}\"}} 1",
+        zk_provider
+    );
+    let _ = writeln!(
+        out,
+        "vela_verifiability_provider{{subsystem=\"tee\",platform=\"{}\"}} 1",
+        tee_platform
     );
 
     (

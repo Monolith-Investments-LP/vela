@@ -176,9 +176,54 @@ fn seed_order_books(engine: &mut MatchingEngine) {
     }
 }
 
+fn init_observability() {
+    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let is_prod = std::env::var("ENVIRONMENT")
+        .map(|v| v.eq_ignore_ascii_case("production"))
+        .unwrap_or(false);
+
+    // Split init so we don't panic if a global subscriber was already
+    // installed (e.g. by a test harness inside the same process).
+    let init_result = if is_prod {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt::layer().json().with_target(true))
+            .try_init()
+    } else {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt::layer())
+            .try_init()
+    };
+
+    if init_result.is_ok() {
+        // Install a panic hook that emits a structured error before the
+        // default handler runs. Only wire it once — matches the
+        // subscriber install above.
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let payload = info
+                .payload()
+                .downcast_ref::<&'static str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "<non-string panic payload>".to_string());
+            let location = info
+                .location()
+                .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+                .unwrap_or_else(|| "<unknown>".to_string());
+            tracing::error!(target: "panic", location = %location, payload = %payload, "process panic");
+            default_hook(info);
+        }));
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    init_observability();
 
     let port: u16 = std::env::var("PORT")
         .ok()
