@@ -7,9 +7,17 @@ use api::wal::{
     ORDER_PROCESSED,
 };
 
+/// Monotonic counter so two temp dirs created back-to-back in the same
+/// test are guaranteed distinct even when the CI clock resolution is
+/// coarser than one nanosecond (Linux runners with `CLOCK_REALTIME`
+/// updated only every ~1ms occasionally serve the same value twice and
+/// gave us a flaky `test_wal_clean_shutdown_detection`).
+static TEMP_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn temp_wal_dir(label: &str) -> PathBuf {
+    let n = TEMP_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-        "vela_wal_{label}_{}",
+        "vela_wal_{label}_{}_{n}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()

@@ -165,11 +165,7 @@ contract VelaSettlement is ReentrancyGuard, Ownable2Step, Pausable {
     /// Includes `address(this)` and `block.chainid` for domain separation,
     /// so signatures cannot be replayed against a different Vela deployment
     /// or a different chain.
-    function withdrawHash(address user, address asset, uint256 amount, uint256 nonce)
-        public
-        view
-        returns (bytes32)
-    {
+    function withdrawHash(address user, address asset, uint256 amount, uint256 nonce) public view returns (bytes32) {
         bytes32 inner = keccak256(abi.encodePacked(user, asset, amount, nonce, block.chainid, address(this)));
         return inner.toEthSignedMessageHash();
     }
@@ -336,5 +332,5 @@ contract VelaSettlement is ReentrancyGuard, Ownable2Step, Pausable {
         }
     }
 
-    receive() external payable {}
+    receive() external payable { }
 }

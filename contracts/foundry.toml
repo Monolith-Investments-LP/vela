@@ -15,6 +15,9 @@ optimizer_runs = 200
 line_length = 120
 tab_width = 4
 bracket_spacing = true
+# Don't reformat vendored deps — those live under lib/ and are pinned
+# to their upstream style.
+ignore = ["lib/**/*.sol"]
 
 [fuzz]
 runs = 10_000

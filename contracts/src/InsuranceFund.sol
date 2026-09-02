@@ -60,11 +60,7 @@ contract InsuranceFund is Ownable, ReentrancyGuard {
 
     /// @notice Perp engine calls this when a liquidation leaves bad
     /// debt that the borrower's collateral can't cover.
-    function coverLoss(address to, uint256 amount, bytes32 reason)
-        external
-        nonReentrant
-        onlyPerpEngine
-    {
+    function coverLoss(address to, uint256 amount, bytes32 reason) external nonReentrant onlyPerpEngine {
         if (amount == 0) revert ZeroAmount();
         if (to == address(0)) revert ZeroAddress();
         if (asset.balanceOf(address(this)) < amount) revert InsufficientReserve();

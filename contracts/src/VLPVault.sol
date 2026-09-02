@@ -103,21 +103,11 @@ contract VLPVault is ERC4626, Ownable, Pausable {
     // ERC4626 overrides that respect the pause switch
     // ---------------------------------------------------------------
 
-    function deposit(uint256 assets, address receiver)
-        public
-        override
-        whenNotPaused
-        returns (uint256)
-    {
+    function deposit(uint256 assets, address receiver) public override whenNotPaused returns (uint256) {
         return super.deposit(assets, receiver);
     }
 
-    function mint(uint256 shares, address receiver)
-        public
-        override
-        whenNotPaused
-        returns (uint256)
-    {
+    function mint(uint256 shares, address receiver) public override whenNotPaused returns (uint256) {
         return super.mint(shares, receiver);
     }
 
@@ -130,12 +120,7 @@ contract VLPVault is ERC4626, Ownable, Pausable {
         return super.withdraw(assets, receiver, owner_);
     }
 
-    function redeem(uint256 shares, address receiver, address owner_)
-        public
-        override
-        whenNotPaused
-        returns (uint256)
-    {
+    function redeem(uint256 shares, address receiver, address owner_) public override whenNotPaused returns (uint256) {
         return super.redeem(shares, receiver, owner_);
     }
 }

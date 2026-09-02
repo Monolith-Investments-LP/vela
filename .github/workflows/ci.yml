@@ -53,6 +53,11 @@ jobs:
     name: Rust — cargo-audit
     runs-on: ubuntu-latest
     continue-on-error: true
+    permissions:
+      # rustsec/audit-check posts a check-run via the API; without this
+      # it fails with "Resource not accessible by integration".
+      checks: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: rustsec/audit-check@v2.0.0
@@ -97,6 +102,21 @@ jobs:
       - name: Show forge version
         run: forge --version
 
+      # OZ + forge-std aren't tracked in the repo (contracts/.gitignore
+      # excludes lib/) and there's no root .gitmodules, so fetch them
+      # explicitly. Pin to the same SHAs the local dev environment uses
+      # so the CI build is reproducible.
+      - name: Fetch forge deps
+        run: |
+          set -euo pipefail
+          rm -rf lib
+          mkdir -p lib
+          git clone --depth 1 --branch v1.15.0 \
+            https://github.com/foundry-rs/forge-std.git lib/forge-std
+          git clone --depth 1 --branch v5.6.1 \
+            https://github.com/OpenZeppelin/openzeppelin-contracts.git \
+            lib/openzeppelin-contracts
+
       - name: Forge fmt check
         run: forge fmt --check
 
@@ -118,6 +138,16 @@ jobs:
       - uses: foundry-rs/foundry-toolchain@v1
         with:
           version: stable
+      - name: Fetch forge deps
+        run: |
+          set -euo pipefail
+          rm -rf lib
+          mkdir -p lib
+          git clone --depth 1 --branch v1.15.0 \
+            https://github.com/foundry-rs/forge-std.git lib/forge-std
+          git clone --depth 1 --branch v5.6.1 \
+            https://github.com/OpenZeppelin/openzeppelin-contracts.git \
+            lib/openzeppelin-contracts
       - name: Coverage
         run: forge coverage --report summary
 

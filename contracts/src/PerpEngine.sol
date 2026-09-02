@@ -60,9 +60,7 @@ contract PerpEngine is Ownable2Step, Pausable, ReentrancyGuard {
 
     event CollateralDeposited(address indexed user, bytes32 indexed market, uint256 amount);
     event CollateralWithdrawn(address indexed user, bytes32 indexed market, uint256 amount);
-    event PositionSettled(
-        address indexed user, bytes32 indexed market, int256 pnlDelta, uint256 nonce
-    );
+    event PositionSettled(address indexed user, bytes32 indexed market, int256 pnlDelta, uint256 nonce);
     event OperatorProposed(address indexed proposed, uint256 eta);
     event OperatorRotated(address indexed previous, address indexed next);
     event InsuranceFundSet(address indexed previous, address indexed next);
@@ -92,12 +90,11 @@ contract PerpEngine is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Operator co-signs withdrawals so the contract can reject
     /// requests that would leave a position under-margined. The signed
     /// payload is (user, market, amount, nonce, chainid, this).
-    function withdrawCollateral(
-        bytes32 market,
-        uint256 amount,
-        uint256 nonce,
-        bytes calldata operatorSig
-    ) external nonReentrant whenNotPaused {
+    function withdrawCollateral(bytes32 market, uint256 amount, uint256 nonce, bytes calldata operatorSig)
+        external
+        nonReentrant
+        whenNotPaused
+    {
         if (amount == 0) revert ZeroAmount();
         if (collateral[msg.sender][market] < amount) revert InsufficientCollateral();
         if (usedSettleNonces[msg.sender][nonce]) revert NonceAlreadyUsed();
@@ -115,13 +112,12 @@ contract PerpEngine is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Apply a signed PnL delta to a user's collateral. Losses
     /// beyond the user's collateral pull from the insurance fund and
     /// emit an unrecovered-loss event. Called by the off-chain matcher.
-    function settlePosition(
-        address user,
-        bytes32 market,
-        int256 pnlDelta,
-        uint256 nonce,
-        bytes calldata operatorSig
-    ) external nonReentrant onlyOperator whenNotPaused {
+    function settlePosition(address user, bytes32 market, int256 pnlDelta, uint256 nonce, bytes calldata operatorSig)
+        external
+        nonReentrant
+        onlyOperator
+        whenNotPaused
+    {
         if (usedSettleNonces[user][nonce]) revert NonceAlreadyUsed();
         _verifyOperator(_settleHash(user, market, pnlDelta, nonce), operatorSig);
         usedSettleNonces[user][nonce] = true;
@@ -185,14 +181,8 @@ contract PerpEngine is Ownable2Step, Pausable, ReentrancyGuard {
     // Internals
     // ---------------------------------------------------------------
 
-    function _settleHash(address user, bytes32 market, int256 pnlDelta, uint256 nonce)
-        internal
-        view
-        returns (bytes32)
-    {
-        return keccak256(
-            abi.encodePacked("perp:settle:", user, market, pnlDelta, nonce, block.chainid, address(this))
-        );
+    function _settleHash(address user, bytes32 market, int256 pnlDelta, uint256 nonce) internal view returns (bytes32) {
+        return keccak256(abi.encodePacked("perp:settle:", user, market, pnlDelta, nonce, block.chainid, address(this)));
     }
 
     function _withdrawHash(address user, bytes32 market, uint256 amount, uint256 nonce)
@@ -200,9 +190,7 @@ contract PerpEngine is Ownable2Step, Pausable, ReentrancyGuard {
         view
         returns (bytes32)
     {
-        return keccak256(
-            abi.encodePacked("perp:withdraw:", user, market, amount, nonce, block.chainid, address(this))
-        );
+        return keccak256(abi.encodePacked("perp:withdraw:", user, market, amount, nonce, block.chainid, address(this)));
     }
 
     function _verifyOperator(bytes32 hash, bytes calldata sig) internal view {
@@ -221,8 +209,7 @@ contract PerpEngine is Ownable2Step, Pausable, ReentrancyGuard {
         if (uint256(s) > 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0) {
             revert InvalidSignature();
         }
-        bytes32 ethHash =
-            keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
+        bytes32 ethHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
         address signer = ecrecover(ethHash, v, r, s);
         if (signer == address(0) || signer != operator) revert InvalidSignature();
     }

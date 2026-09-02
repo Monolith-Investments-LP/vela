@@ -196,9 +196,7 @@ contract PerpEngineTest is Test {
     }
 
     function _settleSig(address u, bytes32 m, int256 pnl, uint256 nonce) internal view returns (bytes memory) {
-        bytes32 h = keccak256(
-            abi.encodePacked("perp:settle:", u, m, pnl, nonce, block.chainid, address(engine))
-        );
+        bytes32 h = keccak256(abi.encodePacked("perp:settle:", u, m, pnl, nonce, block.chainid, address(engine)));
         bytes32 eth = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", h));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(opKey, eth);
         return abi.encodePacked(r, s, v);
