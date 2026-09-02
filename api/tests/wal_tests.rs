@@ -386,6 +386,12 @@ async fn test_wal_clean_shutdown_detection() {
     .await
     .unwrap();
 
+    // Explicit flush before the sync read — otherwise the ENGINE_STOP
+    // may still be in the tokio file buffer when
+    // `was_clean_shutdown_sync` opens the file with std::fs, which
+    // showed up as a flake on Linux runners even though the drop below
+    // eventually closes the handle.
+    wal.flush().await.unwrap();
     drop(wal);
 
     assert!(
@@ -407,6 +413,7 @@ async fn test_wal_clean_shutdown_detection() {
     .await
     .unwrap();
 
+    wal2.flush().await.unwrap();
     drop(wal2);
 
     assert!(
