@@ -1,6 +1,30 @@
 // ---------------------------------------------------------------------------
 // Vela HTTP API client — typed against the Rust API handler
+//
+// The interfaces below are hand-authored for ergonomics, but the
+// generated `api-types.gen.ts` is the ground truth mirror of the
+// backend's `/openapi.json`. To regenerate:
+//
+//     cargo run --quiet --bin dump-openapi > /tmp/vela-openapi.json \
+//       && (cd frontend && npm run generate:api-types \
+//             && VELA_OPENAPI_URL= npx openapi-typescript \
+//                  /tmp/vela-openapi.json -o lib/api-types.gen.ts)
+//
+// Or point the script at a running dev server:
+//
+//     (cd frontend && VELA_OPENAPI_URL=http://localhost:3001 \
+//        npm run generate:api-types)
+//
+// TypeScript will complain in this file if the generated schema and a
+// hand-authored interface disagree — see the `_check` assertions.
 // ---------------------------------------------------------------------------
+
+import type { components } from './api-types.gen'
+
+/** Re-export of the OpenAPI component schemas so downstream code can
+ * import `components["schemas"]["X"]` without depending on the
+ * generated file directly. */
+export type ApiSchemas = components['schemas']
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? 'https://vela-engine.fly.dev'
@@ -311,21 +335,10 @@ export async function deposit(
 // Portfolio / PnL
 // ---------------------------------------------------------------------------
 
-export interface PortfolioLot {
-  asset: string
-  quantity: string
-  cost_basis_usdc: string
-  acquired_at: number
-}
-
-export interface PortfolioResponse {
-  address: string
-  realized_pnl_usdc: string
-  unrealized_pnl_usdc: string
-  cost_basis_method: 'FIFO' | 'HIFO'
-  tax_lots: PortfolioLot[]
-  per_market: { market: string; realized_usdc: string; unrealized_usdc: string }[]
-}
+// Sourced from the OpenAPI spec so the field set stays honest — if the
+// backend adds a field, tsc yells here first.
+export type PortfolioLot = ApiSchemas['PortfolioLot']
+export type PortfolioResponse = ApiSchemas['PortfolioResponse']
 
 /** GET /portfolio/:address */
 export function getPortfolio(
@@ -377,14 +390,7 @@ export function getAnalytics(
   return apiFetch(`/analytics?timeframe=${timeframe}`)
 }
 
-export interface ProofStats {
-  total: number
-  proven: number
-  pending: number
-  skipped: number
-  failed: number
-  provider: string
-}
+export type ProofStats = ApiSchemas['ProofStats']
 
 export function getProofStats(): Promise<ApiResponse<ProofStats>> {
   return apiFetch('/proofs/stats')
@@ -394,16 +400,7 @@ export function getProofs(limit = 50): Promise<ApiResponse<unknown[]>> {
   return apiFetch(`/proofs?limit=${limit}`)
 }
 
-export interface TeeStats {
-  total_batches: number
-  attested: number
-  simulated: number
-  pending: number
-  failed: number
-  platform: string
-  binary_hash: string
-  platform_status: string
-}
+export type TeeStats = ApiSchemas['TeeStats']
 
 export function getTeeStats(): Promise<ApiResponse<TeeStats>> {
   return apiFetch('/tee/stats')
@@ -430,30 +427,8 @@ export function getDecisions(): Promise<ApiResponse<DecisionSummary[]>> {
 // Perps
 // ---------------------------------------------------------------------------
 
-export interface PerpMarket {
-  market: string
-  mark_price_micro_usdc: number
-  index_price_micro_usdc: number
-  funding_index: number
-  funding_rate_bps_per_hour: number
-  gross_open_interest: number
-  net_open_interest: number
-  initial_margin_bps: number
-  maintenance_margin_bps: number
-  max_leverage: number
-}
-
-export interface PerpPosition {
-  market: string
-  size: string
-  entry_price_micro_usdc: number
-  realized_pnl_micro_usdc: string
-  notional_micro_usdc: string
-  unrealized_pnl_micro_usdc: string
-  initial_requirement_micro_usdc: string
-  maintenance_requirement_micro_usdc: string
-  mark_price_micro_usdc: number
-}
+export type PerpMarket = ApiSchemas['PerpMarket']
+export type PerpPosition = ApiSchemas['PerpPosition']
 
 export function getPerpMarkets(): Promise<ApiResponse<PerpMarket[]>> {
   return apiFetch('/perp/markets')
@@ -465,16 +440,7 @@ export function getPerpAccount(
   return apiFetch(`/perp/account/${encodeURIComponent(address)}`)
 }
 
-export interface PerpLiquidationCandidate {
-  user: string
-  market: string
-  size: string
-  entry_price_micro_usdc: number
-  mark_price_micro_usdc: number
-  notional_micro_usdc: string
-  maintenance_requirement_micro_usdc: string
-  equity_micro_usdc: string
-}
+export type PerpLiquidationCandidate = ApiSchemas['PerpLiquidationCandidate']
 
 export function getLiquidatablePositions(): Promise<
   ApiResponse<PerpLiquidationCandidate[]>
@@ -531,35 +497,13 @@ export function getRfqQuotes(rfqId: string): Promise<ApiResponse<RfqQuote[]>> {
   return apiFetch(`/rfq/quotes/${encodeURIComponent(rfqId)}`)
 }
 
-export interface BorrowLendMarket {
-  asset: string
-  total_supply: string
-  total_borrows: string
-  utilization_bps: number
-  borrow_rate_apr_bps: number
-  supply_rate_apr_bps: number
-  collateral_factor_bps: number
-  liquidation_bonus_bps: number
-  price_micro_usdc: number
-}
+export type BorrowLendMarket = ApiSchemas['BorrowLendMarket']
 
 export function getBorrowLendMarkets(): Promise<ApiResponse<BorrowLendMarket[]>> {
   return apiFetch('/borrow-lend/markets')
 }
 
-export interface BorrowLendAccount {
-  user: string
-  positions: {
-    asset: string
-    supply_native: string
-    borrow_native: string
-    supply_value_micro_usdc: string
-    borrow_value_micro_usdc: string
-  }[]
-  borrowing_power_micro_usdc: string
-  total_borrow_value_micro_usdc: string
-  health_factor_bps: string
-}
+export type BorrowLendAccount = ApiSchemas['BorrowLendAccount']
 
 export function getBorrowLendAccount(
   address: string,
