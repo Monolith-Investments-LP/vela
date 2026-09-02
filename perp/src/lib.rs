@@ -83,7 +83,7 @@ impl MarketConfig {
     }
 
     pub fn maintenance_margin_bps(&self) -> u32 {
-        (self.initial_margin_bps() as u32) * self.maint_ratio_bps as u32 / BPS_DENOM as u32
+        self.initial_margin_bps() * self.maint_ratio_bps as u32 / BPS_DENOM as u32
     }
 }
 
@@ -259,7 +259,7 @@ pub fn unrealized_pnl_micro_usdc(pos: &Position, mark_price: u64) -> i128 {
 }
 
 pub fn notional_micro_usdc(pos: &Position, mark_price: u64) -> u128 {
-    (pos.size.unsigned_abs() as u128 * mark_price as u128) / PRICE_SCALE as u128
+    (pos.size.unsigned_abs() * mark_price as u128) / PRICE_SCALE as u128
 }
 
 // ---------- Margin ----------

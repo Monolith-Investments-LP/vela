@@ -529,7 +529,7 @@ mod tests {
 
         let wire = serialize(&msg);
         assert!(wire.starts_with(b"8=FIX.4.4"));
-        assert!(wire.ends_with(&[b'\x01']));
+        assert!(wire.ends_with(b"\x01"));
         assert!(wire.contains(&SOH));
 
         let (parsed, consumed) = parse(&wire).unwrap();

@@ -185,7 +185,7 @@ impl BatchDispatcher {
         let mut flat_responses = Vec::with_capacity(batch_size * 2);
         let mut decryption_proofs = Vec::new();
 
-        for (item, responses) in pending.into_iter().zip(all_responses.into_iter()) {
+        for (item, responses) in pending.into_iter().zip(all_responses) {
             flat_responses.extend_from_slice(&responses);
             if let Some(proof) = item.decryption_proof {
                 decryption_proofs.push(proof);

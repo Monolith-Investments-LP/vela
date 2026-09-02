@@ -323,9 +323,9 @@ pub async fn open_handler(
     let key = (user_lower.clone(), body.market.clone());
     let mut pos = state.perp.positions.entry(key.clone()).or_default();
     settle_funding(&mut pos, funding_index);
-    let old_abs = pos.size.unsigned_abs() as u128;
+    let old_abs = pos.size.unsigned_abs();
     apply_fill(&mut pos, body.size, body.price_micro_usdc);
-    let new_abs = pos.size.unsigned_abs() as u128;
+    let new_abs = pos.size.unsigned_abs();
     let net_delta = body.size;
     let post = serde_json::json!({
         "user": user_lower,
@@ -475,7 +475,7 @@ pub async fn liquidate_handler(
     // opposite of the borrower's current side so the closing fill
     // realizes P&L against the mark.
     let close_abs =
-        (pre_size.unsigned_abs() as u128 * LIQUIDATION_CLOSE_FACTOR_BPS / 10_000u128) as i128;
+        (pre_size.unsigned_abs() * LIQUIDATION_CLOSE_FACTOR_BPS / 10_000u128) as i128;
     if close_abs == 0 {
         return (
             StatusCode::CONFLICT,
@@ -487,7 +487,7 @@ pub async fn liquidate_handler(
 
     // Compute the penalty from the notional actually being closed.
     let close_notional_micro_usdc =
-        (close_abs.unsigned_abs() as u128 * mark_price as u128) / perp::PRICE_SCALE as u128;
+        (close_abs.unsigned_abs() * mark_price as u128) / perp::PRICE_SCALE as u128;
     let penalty = (close_notional_micro_usdc
         * market_snapshot.config.maintenance_margin_bps() as u128)
         / 10_000u128;
