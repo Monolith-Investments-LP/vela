@@ -3,14 +3,27 @@ Cargo.lock
 *.log
 *.prof
 flamegraph.svg
+profile.json.gz
 perf.data
 perf.data.old
+*.trace
 .DS_Store
 .env
 /data/
 /snapshots/
 .vercel
 .env*.local
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Python bytecode / caches (from one-off patch scripts)
+*.pyc
+__pycache__/
+
+# IDE
+.idea/
+.vscode/
 
 # Local-only planning docs; never pushed.
 BUILDPLAN.md
