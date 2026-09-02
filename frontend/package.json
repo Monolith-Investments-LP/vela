@@ -13,11 +13,14 @@
     "generate:api-types": "openapi-typescript ${VELA_OPENAPI_URL:-http://localhost:3001}/openapi.json --output lib/api-types.gen.ts"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.102.8",
     "framer-motion": "^12.38.0",
     "lightweight-charts": "^5.1.0",
     "next": "^14.2.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
+    "viem": "^2.56.3",
+    "wagmi": "^3.7.7",
     "zod": "^4.5.4"
   },
   "devDependencies": {

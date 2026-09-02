@@ -1,28 +1,24 @@
 'use client'
 
 // ---------------------------------------------------------------------------
-// Vela wallet auth context.
+// Vela wallet auth context — thin wrapper over wagmi.
 //
-// Flow:
-//   1. connect()           — request wallet accounts, store address, persist
-//   2. signIn(wsClient)    — RequestChallenge → sign vela:auth:{nonce} → Auth
-//   3. signOut()           — clear session AND persisted address
+// wagmi/viem handles account state, connection, and signing. This module
+// keeps the historical AuthContext surface (`address`, `isConnected`,
+// `isAuthenticated`, `connect`, `signOut`, `signIn`) so pages don't
+// need to change, but delegates every wallet interaction to wagmi hooks.
 //
 // Persistence
 // -----------
-// We persist only the connected address in localStorage. The WS-side
-// `isAuthenticated` flag is deliberately NOT persisted — that flag tracks
-// the freshness of a per-connection challenge/response, and a stale
-// bearer that survives page reload would silently diverge from the
-// server's view. On refresh the user sees "connected" and clicks "Sign In"
-// to re-establish an authenticated WS session.
+// wagmi persists the connected account itself (localStorage under
+// `wagmi.store`) and auto-reconnects on mount. We only persist the
+// address explicitly to preserve the legacy key for any external tool
+// that reads it — but wagmi is the source of truth.
 //
-// Wallet detection
-// ----------------
-// Detection uses the EIP-1193 `window.ethereum` injection, which every
-// major browser wallet (MetaMask, Rabby, Coinbase Wallet, Brave, Frame)
-// exposes. Fuller wallet abstraction (WalletConnect, Ledger over WC) is
-// tracked separately — a wagmi/viem migration is a larger refactor.
+// isAuthenticated is deliberately NOT persisted. It tracks the per-WS
+// challenge, and a stale bearer that survives a page reload would
+// silently diverge from the server view. On refresh, the user's account
+// is reconnected by wagmi and `isAuthenticated` starts false.
 // ---------------------------------------------------------------------------
 
 import {
@@ -30,14 +26,18 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
   type ReactNode,
 } from 'react'
+import {
+  useAccount,
+  useConnect,
+  useConnectors,
+  useDisconnect,
+  useSignMessage,
+} from 'wagmi'
 import type { VelaWsClient } from './ws'
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 interface AuthState {
   address: string | null
@@ -46,140 +46,90 @@ interface AuthState {
 }
 
 export interface AuthContextValue extends AuthState {
-  /** Prompt the wallet, store the returned address, and persist it. */
+  /** Trigger the wagmi connect flow (uses the first available connector,
+   * typically the injected wallet). Returns the connected address. */
   connect: () => Promise<string>
-  /** Clear all auth state (session + persisted address). */
+  /** Disconnect via wagmi + clear local state. */
   signOut: () => void
-  /**
-   * Run the WS challenge-response flow:
-   *   RequestChallenge → receive nonce → personal_sign → Auth → Authenticated
-   */
+  /** Run the WS challenge-response flow. Signs via wagmi's
+   * useSignMessage; no direct window.ethereum access. */
   signIn: (wsClient: VelaWsClient) => Promise<void>
 }
 
 const PERSISTED_ADDRESS_KEY = 'vela.auth.address'
-
-function readPersistedAddress(): string | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const raw = window.localStorage.getItem(PERSISTED_ADDRESS_KEY)
-    if (!raw) return null
-    // Basic shape guard — an obviously-invalid stored value should be
-    // ignored rather than surfacing as a "connected" state.
-    if (!/^0x[0-9a-f]{40}$/.test(raw)) return null
-    return raw
-  } catch {
-    return null
-  }
-}
-
-function writePersistedAddress(address: string | null) {
-  if (typeof window === 'undefined') return
-  try {
-    if (address) {
-      window.localStorage.setItem(PERSISTED_ADDRESS_KEY, address)
-    } else {
-      window.localStorage.removeItem(PERSISTED_ADDRESS_KEY)
-    }
-  } catch {
-    // Storage may be unavailable (private mode, quota, etc.) — best effort.
-  }
-}
-
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AuthState>({
-    address: null,
-    isConnected: false,
-    isAuthenticated: false,
-  })
+  const { address: wagmiAddress, isConnected: wagmiConnected } = useAccount()
+  const { connectAsync } = useConnect()
+  const connectors = useConnectors()
+  const { disconnect } = useDisconnect()
+  const { signMessageAsync } = useSignMessage()
 
-  // Rehydrate the persisted address on mount so a refresh keeps the
-  // header showing the connected wallet.
-  useEffect(() => {
-    const stored = readPersistedAddress()
-    if (stored) {
-      setState({
-        address: stored,
-        isConnected: true,
-        isAuthenticated: false,
-      })
-    }
-  }, [])
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
 
-  // Listen for wallet-level account changes and drop our session if the
-  // user switches accounts or disconnects the site.
+  const address = useMemo(
+    () => (wagmiAddress ? wagmiAddress.toLowerCase() : null),
+    [wagmiAddress],
+  )
+
+  // Mirror the connected address into the legacy localStorage key so
+  // external tools that used to read it (e.g. curl helpers, older
+  // frontend versions) keep working. wagmi already persists its own
+  // state — this is best-effort compat only.
   useEffect(() => {
-    if (typeof window === 'undefined' || !window.ethereum?.on) return
-    const handleAccountsChanged = (accounts: unknown) => {
-      if (!Array.isArray(accounts) || accounts.length === 0) {
-        writePersistedAddress(null)
-        setState({ address: null, isConnected: false, isAuthenticated: false })
-        return
+    if (typeof window === 'undefined') return
+    try {
+      if (address) {
+        window.localStorage.setItem(PERSISTED_ADDRESS_KEY, address)
+      } else {
+        window.localStorage.removeItem(PERSISTED_ADDRESS_KEY)
       }
-      const next = String(accounts[0]).toLowerCase()
-      writePersistedAddress(next)
-      setState({ address: next, isConnected: true, isAuthenticated: false })
+    } catch {
+      /* private mode / quota — best effort */
     }
-    // EIP-1193 event surface is optional-typed; guard the on/removeListener.
-    const eth = window.ethereum as unknown as {
-      on?: (event: string, handler: (accounts: unknown) => void) => void
-      removeListener?: (event: string, handler: (accounts: unknown) => void) => void
+  }, [address])
+
+  // If the wallet disconnects mid-session, the WS-authenticated flag has
+  // to drop too — the server-side session is tied to the address.
+  useEffect(() => {
+    if (!wagmiConnected) {
+      setIsAuthenticated(false)
     }
-    eth.on?.('accountsChanged', handleAccountsChanged)
-    return () => eth.removeListener?.('accountsChanged', handleAccountsChanged)
-  }, [])
+  }, [wagmiConnected])
 
   const connect = useCallback(async (): Promise<string> => {
-    if (typeof window === 'undefined' || !window.ethereum) {
+    const connector = connectors[0]
+    if (!connector) {
       throw new Error(
-        'No browser wallet detected. Install MetaMask, Rabby, or another EIP-1193 wallet.',
+        'No browser wallet detected. Install MetaMask, Rabby, Coinbase Wallet, Brave, or Frame.',
       )
     }
-    const accounts = (await window.ethereum.request({
-      method: 'eth_requestAccounts',
-    })) as string[]
-
-    if (!accounts[0]) throw new Error('No accounts returned from wallet.')
-    const address = accounts[0].toLowerCase()
-    writePersistedAddress(address)
-    setState((s) => ({ ...s, address, isConnected: true }))
-    return address
-  }, [])
+    const result = await connectAsync({ connector })
+    const next = result.accounts[0]
+    if (!next) throw new Error('Wallet returned no accounts.')
+    return next.toLowerCase()
+  }, [connectAsync, connectors])
 
   const signOut = useCallback(() => {
-    writePersistedAddress(null)
-    setState({ address: null, isConnected: false, isAuthenticated: false })
-  }, [])
+    disconnect()
+    setIsAuthenticated(false)
+  }, [disconnect])
 
   const signIn = useCallback(
     (wsClient: VelaWsClient): Promise<void> => {
-      const { address } = state
-
       if (!address) {
         return Promise.reject(new Error('Wallet not connected.'))
       }
-      if (typeof window === 'undefined' || !window.ethereum) {
-        return Promise.reject(new Error('No browser wallet detected.'))
-      }
-
       return new Promise<void>((resolve, reject) => {
         let settled = false
-
         const unsubscribe = wsClient.onMessage(async (msg) => {
           if (settled) return
-
           if (msg.type === 'challenge') {
-            const { nonce } = msg
             try {
-              const message = `vela:auth:${nonce}`
-              const signature = (await window.ethereum!.request({
-                method: 'personal_sign',
-                params: [message, address],
-              })) as string
-
-              wsClient.authChallenge(address, signature, nonce)
+              const message = `vela:auth:${msg.nonce}`
+              const signature = await signMessageAsync({ message })
+              wsClient.authChallenge(address, signature, msg.nonce)
             } catch (err) {
               settled = true
               unsubscribe()
@@ -187,33 +137,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
             return
           }
-
           if (msg.type === 'authenticated') {
             settled = true
             unsubscribe()
-            setState((s) => ({ ...s, isAuthenticated: true }))
+            setIsAuthenticated(true)
             resolve()
             return
           }
-
           if (msg.type === 'error') {
             settled = true
             unsubscribe()
             reject(new Error(msg.message))
           }
         })
-
         wsClient.requestChallenge()
       })
     },
-    [state],
+    [address, signMessageAsync],
   )
 
-  return (
-    <AuthContext.Provider value={{ ...state, connect, signOut, signIn }}>
-      {children}
-    </AuthContext.Provider>
-  )
+  const value: AuthContextValue = {
+    address,
+    isConnected: wagmiConnected,
+    isAuthenticated,
+    connect,
+    signOut,
+    signIn,
+  }
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
 export function useAuth(): AuthContextValue {

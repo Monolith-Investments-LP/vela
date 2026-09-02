@@ -2,19 +2,20 @@
 
 import { AnimatePresence, motion } from 'framer-motion'
 import { usePathname } from 'next/navigation'
-import { AuthProvider } from '@/lib/auth'
+import Providers from '@/components/Providers'
 import Nav from '@/components/Nav'
 import BetaBanner from '@/components/BetaBanner'
 
-/// Client-side wrapper around every route: owns the auth context, the
-/// nav, and the framer-motion page-transition animation. The root
-/// layout is a server component that mounts this shell once so that
-/// only the interactive pieces below force a client boundary.
+/// Client-side wrapper around every route: owns the provider tree
+/// (Wagmi + React Query + AuthProvider), the nav, and the framer-motion
+/// page-transition animation. The root layout is a server component that
+/// mounts this shell once so that only the interactive pieces below
+/// force a client boundary.
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
 
   return (
-    <AuthProvider>
+    <Providers>
       <div className="relative z-10" style={{ paddingTop: '96px' }}>
         <BetaBanner />
         <Nav />
@@ -32,6 +33,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </AnimatePresence>
         </main>
       </div>
-    </AuthProvider>
+    </Providers>
   )
 }
