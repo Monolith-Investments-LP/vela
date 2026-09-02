@@ -986,23 +986,128 @@ function OrderEntryPanel({
   )
 }
 
-function MobileGate() {
+function MobileGate({
+  pair,
+  midPrice,
+  market,
+}: {
+  pair: string
+  midPrice: number | null
+  market: MarketResponse | undefined
+}) {
+  const fmtMid = midPrice
+    ? midPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })
+    : '—'
   return (
-    <div style={{ background: '#0C0C0C', minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '24px', padding: '40px', textAlign: 'center' }}>
-      <span style={{ fontFamily: PF, fontStyle: 'italic', fontSize: '32px', color: '#E8E4D8' }}>Vela</span>
-      <h1 style={{ fontFamily: PF, fontWeight: 900, fontSize: '28px', color: '#E8E4D8', margin: 0 }}>Built for the desktop.</h1>
-      <p style={{ fontFamily: IN, fontWeight: 300, fontSize: '14px', lineHeight: 1.7, color: 'rgba(232,228,216,0.4)', maxWidth: '320px', margin: 0 }}>
-        Vela&apos;s trading terminal requires a larger screen. Open this page on a laptop or desktop to trade.
+    <div
+      style={{
+        background: '#0C0C0C',
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '20px',
+        padding: '40px 24px',
+        textAlign: 'center',
+      }}
+    >
+      <span style={{ fontFamily: PF, fontStyle: 'italic', fontSize: '28px', color: '#E8E4D8' }}>Vela</span>
+
+      {/* Snapshot so mobile visitors get *something* useful. */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+        <span style={{ fontFamily: IN, fontSize: '10px', letterSpacing: '0.18em', color: 'rgba(232,228,216,0.35)', textTransform: 'uppercase' }}>
+          {pair}
+        </span>
+        <span style={{ fontFamily: PF, fontWeight: 900, fontSize: '40px', color: '#E8E4D8', lineHeight: 1 }}>
+          ${fmtMid}
+        </span>
+        {market?.spread && (
+          <span style={{ fontFamily: IN, fontSize: '11px', color: 'rgba(232,228,216,0.4)' }}>
+            Spread {market.spread}
+          </span>
+        )}
+      </div>
+
+      <p
+        style={{
+          fontFamily: IN,
+          fontWeight: 300,
+          fontSize: '13px',
+          lineHeight: 1.7,
+          color: 'rgba(232,228,216,0.4)',
+          maxWidth: '300px',
+          margin: 0,
+        }}
+      >
+        The trading terminal needs a wider screen to render the book, chart, and order entry side-by-side. Every read-only view works on mobile.
       </p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        <Link href="/markets" style={{ background: '#E8E4D8', color: '#0C0C0C', fontFamily: IN, fontWeight: 600, fontSize: '12px', textTransform: 'uppercase', padding: '12px 32px', textDecoration: 'none', display: 'block', width: '200px', textAlign: 'center', letterSpacing: '0.06em' }}>
-          View Markets
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%', maxWidth: '260px' }}>
+        <Link
+          href="/dashboard"
+          style={{
+            background: '#E8E4D8',
+            color: '#0C0C0C',
+            fontFamily: IN,
+            fontWeight: 600,
+            fontSize: '12px',
+            textTransform: 'uppercase',
+            padding: '14px 24px',
+            textDecoration: 'none',
+            textAlign: 'center',
+            letterSpacing: '0.08em',
+          }}
+        >
+          Dashboard
         </Link>
-        <Link href="/" style={{ background: 'transparent', color: 'rgba(232,228,216,0.4)', border: '1px solid rgba(232,228,216,0.15)', fontFamily: IN, fontSize: '12px', padding: '12px 32px', textDecoration: 'none', display: 'block', width: '200px', textAlign: 'center' }}>
-          Back to Home
+        <Link
+          href="/portfolio"
+          style={{
+            background: 'transparent',
+            color: '#E8E4D8',
+            border: '1px solid rgba(232,228,216,0.35)',
+            fontFamily: IN,
+            fontSize: '12px',
+            padding: '14px 24px',
+            textDecoration: 'none',
+            textAlign: 'center',
+            letterSpacing: '0.06em',
+          }}
+        >
+          Portfolio
+        </Link>
+        <Link
+          href="/markets"
+          style={{
+            background: 'transparent',
+            color: 'rgba(232,228,216,0.55)',
+            border: '1px solid rgba(232,228,216,0.15)',
+            fontFamily: IN,
+            fontSize: '12px',
+            padding: '14px 24px',
+            textDecoration: 'none',
+            textAlign: 'center',
+          }}
+        >
+          All markets
+        </Link>
+        <Link
+          href="/"
+          style={{
+            background: 'transparent',
+            color: 'rgba(232,228,216,0.3)',
+            fontFamily: IN,
+            fontSize: '11px',
+            padding: '10px 24px',
+            textDecoration: 'none',
+            textAlign: 'center',
+          }}
+        >
+          Back to home
         </Link>
       </div>
-      <span style={{ fontFamily: IN, fontSize: '10px', color: 'rgba(232,228,216,0.15)', marginTop: '40px' }}>
+      <span style={{ fontFamily: IN, fontSize: '10px', color: 'rgba(232,228,216,0.15)', marginTop: '20px' }}>
         vela.monolithsystematic.com
       </span>
     </div>
@@ -1053,13 +1158,17 @@ export default function TradingPage({ params }: { params: { pair: string } }) {
   }, [])
 
   useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 1024)
+    // Trading terminal needs at least ~768px to render the four-column
+    // grid without horizontal scroll. Tablets in landscape (iPad 810,
+    // Chromebook 1080) now get the real UI; phones still see the
+    // useful summary card in MobileGate.
+    const check = () => setIsMobile(window.innerWidth < 768)
     check()
     window.addEventListener('resize', check)
     return () => window.removeEventListener('resize', check)
   }, [])
 
-  if (isMobile) return <MobileGate />
+  if (isMobile) return <MobileGate pair={pair} midPrice={midPrice} market={market} />
 
   return (
     <>
