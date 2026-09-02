@@ -306,3 +306,287 @@ export async function deposit(
     return { ok: false, error: 'Network error' }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Portfolio / PnL
+// ---------------------------------------------------------------------------
+
+export interface PortfolioLot {
+  asset: string
+  quantity: string
+  cost_basis_usdc: string
+  acquired_at: number
+}
+
+export interface PortfolioResponse {
+  address: string
+  realized_pnl_usdc: string
+  unrealized_pnl_usdc: string
+  cost_basis_method: 'FIFO' | 'HIFO'
+  tax_lots: PortfolioLot[]
+  per_market: { market: string; realized_usdc: string; unrealized_usdc: string }[]
+}
+
+/** GET /account/:address/portfolio */
+export function getPortfolio(
+  address: string,
+  method: 'FIFO' | 'HIFO' = 'FIFO',
+): Promise<ApiResponse<PortfolioResponse>> {
+  return apiFetch(
+    `/account/${encodeURIComponent(address)}/portfolio?method=${method}`,
+  )
+}
+
+/** GET /account/:address/portfolio/csv (returns raw text — not JSON). */
+export async function getPortfolioCsv(
+  address: string,
+  method: 'FIFO' | 'HIFO' = 'FIFO',
+): Promise<{ ok: boolean; csv?: string; error?: string }> {
+  try {
+    const res = await fetch(
+      `${API_URL}/account/${encodeURIComponent(address)}/portfolio/csv?method=${method}`,
+      { cache: 'no-store' },
+    )
+    if (!res.ok) return { ok: false, error: res.statusText }
+    const csv = await res.text()
+    return { ok: true, csv }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Analytics / batches / proofs / TEE / decisions
+// ---------------------------------------------------------------------------
+
+export interface AnalyticsSummary {
+  timeframe: string
+  markets: {
+    market: string
+    volume_micro_usdc: string
+    trades: number
+    spread_bps: number
+    depth_micro_usdc: string
+    slippage_bps: number
+  }[]
+}
+
+export function getAnalytics(
+  timeframe: '5m' | '1h' | '24h' = '1h',
+): Promise<ApiResponse<AnalyticsSummary>> {
+  return apiFetch(`/analytics?timeframe=${timeframe}`)
+}
+
+export interface ProofStats {
+  total: number
+  proven: number
+  pending: number
+  skipped: number
+  failed: number
+  provider: string
+}
+
+export function getProofStats(): Promise<ApiResponse<ProofStats>> {
+  return apiFetch('/proofs/stats')
+}
+
+export function getProofs(limit = 50): Promise<ApiResponse<unknown[]>> {
+  return apiFetch(`/proofs?limit=${limit}`)
+}
+
+export interface TeeStats {
+  total_batches: number
+  attested: number
+  simulated: number
+  pending: number
+  failed: number
+  platform: string
+  binary_hash: string
+  platform_status: string
+}
+
+export function getTeeStats(): Promise<ApiResponse<TeeStats>> {
+  return apiFetch('/tee/stats')
+}
+
+export function getAttestations(limit = 50): Promise<ApiResponse<unknown[]>> {
+  return apiFetch(`/attestations?limit=${limit}`)
+}
+
+export interface DecisionSummary {
+  id: number
+  title: string
+  body: string
+  status: 'PENDING' | 'ENACTED' | 'REJECTED'
+  proposed_at: number
+  enacted_at?: number
+}
+
+export function getDecisions(): Promise<ApiResponse<DecisionSummary[]>> {
+  return apiFetch('/decisions')
+}
+
+// ---------------------------------------------------------------------------
+// Perps
+// ---------------------------------------------------------------------------
+
+export interface PerpMarket {
+  market: string
+  mark_price_micro_usdc: number
+  index_price_micro_usdc: number
+  funding_index: number
+  funding_rate_bps_per_hour: number
+  gross_open_interest: number
+  net_open_interest: number
+  initial_margin_bps: number
+  maintenance_margin_bps: number
+  max_leverage: number
+}
+
+export interface PerpPosition {
+  market: string
+  size: string
+  entry_price_micro_usdc: number
+  realized_pnl_micro_usdc: string
+  notional_micro_usdc: string
+  unrealized_pnl_micro_usdc: string
+  initial_requirement_micro_usdc: string
+  maintenance_requirement_micro_usdc: string
+  mark_price_micro_usdc: number
+}
+
+export function getPerpMarkets(): Promise<ApiResponse<PerpMarket[]>> {
+  return apiFetch('/perp/markets')
+}
+
+export function getPerpAccount(
+  address: string,
+): Promise<ApiResponse<{ user: string; positions: PerpPosition[] }>> {
+  return apiFetch(`/perp/account/${encodeURIComponent(address)}`)
+}
+
+export interface PerpLiquidationCandidate {
+  user: string
+  market: string
+  size: string
+  entry_price_micro_usdc: number
+  mark_price_micro_usdc: number
+  notional_micro_usdc: string
+  maintenance_requirement_micro_usdc: string
+  equity_micro_usdc: string
+}
+
+export function getLiquidatablePositions(): Promise<
+  ApiResponse<PerpLiquidationCandidate[]>
+> {
+  return apiFetch('/perp/liquidatable')
+}
+
+// ---------------------------------------------------------------------------
+// Algos (TWAP) / RFQ / sub-accounts / borrow-lend / vaults
+// ---------------------------------------------------------------------------
+
+export interface AlgoStatus {
+  parent_id: string
+  market: string
+  side: 'buy' | 'sell'
+  total_quantity: number
+  filled_quantity: number
+  status: 'active' | 'complete' | 'canceled'
+  slices: { at: number; quantity: number; status: string }[]
+}
+
+export function getAlgoStatus(parentId: string): Promise<ApiResponse<AlgoStatus>> {
+  return apiFetch(`/orders/algo/${encodeURIComponent(parentId)}`)
+}
+
+export interface RfqQuote {
+  id: string
+  market: string
+  side: 'buy' | 'sell'
+  size_micro: number
+  price_micro_usdc: number
+  maker: string
+  expires_at: number
+}
+
+export function getRfqQuotes(): Promise<ApiResponse<RfqQuote[]>> {
+  return apiFetch('/rfq/quotes')
+}
+
+export interface BorrowLendMarket {
+  asset: string
+  total_supply: string
+  total_borrows: string
+  utilization_bps: number
+  borrow_rate_apr_bps: number
+  supply_rate_apr_bps: number
+  collateral_factor_bps: number
+  liquidation_bonus_bps: number
+  price_micro_usdc: number
+}
+
+export function getBorrowLendMarkets(): Promise<ApiResponse<BorrowLendMarket[]>> {
+  return apiFetch('/borrow-lend/markets')
+}
+
+export interface BorrowLendAccount {
+  user: string
+  positions: {
+    asset: string
+    supply_native: string
+    borrow_native: string
+    supply_value_micro_usdc: string
+    borrow_value_micro_usdc: string
+  }[]
+  borrowing_power_micro_usdc: string
+  total_borrow_value_micro_usdc: string
+  health_factor_bps: string
+}
+
+export function getBorrowLendAccount(
+  address: string,
+): Promise<ApiResponse<BorrowLendAccount>> {
+  return apiFetch(`/borrow-lend/account/${encodeURIComponent(address)}`)
+}
+
+export interface VaultSummary {
+  vault_id: string
+  operator: string
+  total_shares: string
+  nav_micro_usdc: string
+  drawdown_bps: number
+}
+
+export function listVaults(): Promise<ApiResponse<VaultSummary[]>> {
+  return apiFetch('/vaults')
+}
+
+// ---------------------------------------------------------------------------
+// Agent-tier badge
+// ---------------------------------------------------------------------------
+
+export interface AgentTier {
+  address: string
+  tier: 'green' | 'amber' | 'red'
+  score: number
+  cleared_until_ms?: number
+}
+
+export function getAgentTier(address: string): Promise<ApiResponse<AgentTier>> {
+  return apiFetch(`/agents/tier/${encodeURIComponent(address)}`)
+}
+
+export interface ReputationScore {
+  address: string
+  fill_quality: number
+  toxicity_avg: number
+  uptime_bps: number
+  score: number
+}
+
+export function getReputation(
+  address: string,
+): Promise<ApiResponse<ReputationScore>> {
+  return apiFetch(`/reputation/${encodeURIComponent(address)}`)
+}

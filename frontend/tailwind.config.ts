@@ -7,6 +7,17 @@ const config: Config = {
     './lib/**/*.{ts,tsx}',
   ],
   theme: {
+    // Mobile-first breakpoints. Explicitly listed so the config is
+    // self-documenting and the mobile-first audit has a single source
+    // of truth (rather than inheriting Tailwind's implicit defaults).
+    screens: {
+      xs: '380px',
+      sm: '640px',
+      md: '768px',
+      lg: '1024px',
+      xl: '1280px',
+      '2xl': '1536px',
+    },
     borderRadius: {
       none: '0px',
       sm: '0px',
