@@ -1,6 +1,7 @@
 # flyctl launch added from .gitignore
 target
-**/Cargo.lock
+# Cargo.lock intentionally NOT excluded — Dockerfile copies it in for
+# reproducible + cacheable release builds.
 **/*.log
 **/*.prof
 **/flamegraph.svg
