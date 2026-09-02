@@ -66,7 +66,7 @@ The batch dispatcher coalesces multiple orders into a single engine lock acquisi
 │              Next.js Frontend               │
 │         vela.monolithsystematic.com         │
 └────────────────────┬────────────────────────┘
-                     │ HTTP / WebSocket
+                     │ HTTP / WebSocket / FIX
 ┌────────────────────▼────────────────────────┐
 │           Rust Matching Engine              │
 │         vela-engine.fly.dev                 │
@@ -76,6 +76,9 @@ The batch dispatcher coalesces multiple orders into a single engine lock acquisi
 │  └──────────┘ └──────────┘ └────────────┘  │
 │  ┌──────────┐ ┌──────────┐ ┌────────────┐  │
 │  │  types   │ │ committer│ │   zkvm     │  │
+│  └──────────┘ └──────────┘ └────────────┘  │
+│  ┌──────────┐ ┌──────────┐ ┌────────────┐  │
+│  │committee │ │   tee    │ │  perp/fix  │  │
 │  └──────────┘ └──────────┘ └────────────┘  │
 └────────────────────┬────────────────────────┘
                      │
@@ -320,8 +323,18 @@ vela/
 ├── engine/      # Matching engine (CLOB, CoW, HFT nonces, fees)
 ├── state/       # Depth-32 sparse Merkle tree, delta snapshots
 ├── api/         # Axum HTTP + WebSocket + MM bot + snapshot + DA
+│   └── src/     # Includes borrow_lend, portfolio_margin, credit,
+│                # perp_service, mcp, rfq, subaccounts, strategies,
+│                # reputation, verifiable_intent, agent_tox, algos,
+│                # backtest_attest, prompt_firewall, reasoning_attest
+├── engine/      # Core matcher (order_book, matching_engine, cow_cache,
+│                # delta_buffer, market_shards, credit, ofi)
 ├── committer/   # Batch commitment + forced inclusion
-├── zkvm/        # Optimistic-ZK proof generation
+├── committee/   # BLS12-381 threshold decryption (TEOB)
+├── zkvm/        # Optimistic-ZK + SP1 prover (feature-gated)
+├── tee/         # TEE attestation adapter (SEV-SNP wiring pending)
+├── perp/        # Perpetual futures margin math + funding accrual
+├── fix/         # FIX 4.4 acceptor (session layer)
 ├── contracts/   # Solidity (VelaSettlement.sol, Foundry)
 ├── frontend/    # Next.js 14 frontend
 ├── docs/        # Mintlify documentation
@@ -366,6 +379,33 @@ Currently in **public beta** on Ethereum Sepolia. Do not deposit mainnet funds.
 - [x] Trading leaderboard (/leaderboard)
 - [ ] Smart contract security audit
 - [ ] Mainnet deployment
+
+**Phase 4 — Experimental / partially shipped**
+
+Live in the codebase but not audit-clean; several are scaffolds or run
+behind feature flags. Treat as public preview, not production.
+
+- [~] Perpetual futures MVP — margin math + funding accrual in `perp/`;
+  liquidator watcher and on-chain settlement contract pending.
+- [~] Portfolio margin (spot cross-collateralization) — scenario sweep
+  in `api/src/portfolio_margin.rs`; wires to real Pyth prices via the
+  `oracle` module.
+- [~] Spot borrow-lend — interest model + liquidation math in
+  `api/src/borrow_lend.rs`; oracle-fed pricing.
+- [~] FIX 4.4 acceptor — session layer in `fix/`; adapter into the
+  matching engine in `api/src/fix_adapter.rs`.
+- [~] ZK proving via SP1 — `PlaceholderProver` by default; real SP1
+  requires the Succinct Prover Network and is selected via
+  `ZKVM_PROVIDER=sp1`. Fails closed on `ENVIRONMENT=production` when
+  the provider infra is missing.
+- [~] TEE attestation — `PlaceholderAttester` by default; real AMD
+  SEV-SNP requires attested hardware and is selected via
+  `TEE_PLATFORM=amd-sev-snp`. Fails closed on production without it.
+- [~] Committee (TEOB) — real BLS12-381 threshold decryption in
+  `committee/`; the HTTP path between nodes still uses HMAC auth.
+- [~] MCP server, capability tokens, RFQ, sub-accounts, strategies,
+  reputation, verifiable intent, backtest attestation — see BUILDPLAN
+  Tier 2/3 for scope. Backend endpoints exist; UI coverage is partial.
 
 ---
 
