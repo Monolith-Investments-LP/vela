@@ -17,4 +17,9 @@ tab_width = 4
 bracket_spacing = true
 
 [fuzz]
+runs = 10_000
+
+[invariant]
 runs = 256
+depth = 32
+call_override = false
