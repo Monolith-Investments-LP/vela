@@ -474,8 +474,7 @@ pub async fn liquidate_handler(
     // Close-factor: liquidator may close up to 50% of |size|. Sign is
     // opposite of the borrower's current side so the closing fill
     // realizes P&L against the mark.
-    let close_abs =
-        (pre_size.unsigned_abs() * LIQUIDATION_CLOSE_FACTOR_BPS / 10_000u128) as i128;
+    let close_abs = (pre_size.unsigned_abs() * LIQUIDATION_CLOSE_FACTOR_BPS / 10_000u128) as i128;
     if close_abs == 0 {
         return (
             StatusCode::CONFLICT,
