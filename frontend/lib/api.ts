@@ -327,24 +327,24 @@ export interface PortfolioResponse {
   per_market: { market: string; realized_usdc: string; unrealized_usdc: string }[]
 }
 
-/** GET /account/:address/portfolio */
+/** GET /portfolio/:address */
 export function getPortfolio(
   address: string,
   method: 'FIFO' | 'HIFO' = 'FIFO',
 ): Promise<ApiResponse<PortfolioResponse>> {
   return apiFetch(
-    `/account/${encodeURIComponent(address)}/portfolio?method=${method}`,
+    `/portfolio/${encodeURIComponent(address)}?method=${method.toLowerCase()}`,
   )
 }
 
-/** GET /account/:address/portfolio/csv (returns raw text — not JSON). */
+/** GET /portfolio/:address/csv (returns raw text — not JSON). */
 export async function getPortfolioCsv(
   address: string,
   method: 'FIFO' | 'HIFO' = 'FIFO',
 ): Promise<{ ok: boolean; csv?: string; error?: string }> {
   try {
     const res = await fetch(
-      `${API_URL}/account/${encodeURIComponent(address)}/portfolio/csv?method=${method}`,
+      `${API_URL}/portfolio/${encodeURIComponent(address)}/csv?method=${method.toLowerCase()}`,
       { cache: 'no-store' },
     )
     if (!res.ok) return { ok: false, error: res.statusText }
@@ -500,8 +500,19 @@ export function getAlgoStatus(parentId: string): Promise<ApiResponse<AlgoStatus>
   return apiFetch(`/orders/algo/${encodeURIComponent(parentId)}`)
 }
 
+export interface RfqRequest {
+  id: string
+  market: string
+  side: 'buy' | 'sell'
+  size_micro: number
+  requester: string
+  created_at: number
+  expires_at: number
+}
+
 export interface RfqQuote {
   id: string
+  rfq_id: string
   market: string
   side: 'buy' | 'sell'
   size_micro: number
@@ -510,8 +521,14 @@ export interface RfqQuote {
   expires_at: number
 }
 
-export function getRfqQuotes(): Promise<ApiResponse<RfqQuote[]>> {
-  return apiFetch('/rfq/quotes')
+/** GET /rfq/requests — all open RFQ requests. */
+export function listRfqRequests(): Promise<ApiResponse<RfqRequest[]>> {
+  return apiFetch('/rfq/requests')
+}
+
+/** GET /rfq/quotes/:rfq_id — quotes offered for a specific RFQ. */
+export function getRfqQuotes(rfqId: string): Promise<ApiResponse<RfqQuote[]>> {
+  return apiFetch(`/rfq/quotes/${encodeURIComponent(rfqId)}`)
 }
 
 export interface BorrowLendMarket {
@@ -574,7 +591,7 @@ export interface AgentTier {
 }
 
 export function getAgentTier(address: string): Promise<ApiResponse<AgentTier>> {
-  return apiFetch(`/agents/tier/${encodeURIComponent(address)}`)
+  return apiFetch(`/agents/${encodeURIComponent(address)}/tier`)
 }
 
 export interface ReputationScore {

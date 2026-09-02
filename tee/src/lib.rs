@@ -178,9 +178,9 @@ pub fn platform_from_env() -> TeePlatformKind {
     match raw.to_ascii_lowercase().as_str() {
         "amd-sev-snp" | "sev-snp" | "sevsnp" => TeePlatformKind::AmdSevSnp,
         "placeholder" | "" => TeePlatformKind::Placeholder,
-        other => panic!(
-            "unknown TEE_PLATFORM={other:?}; expected \"placeholder\" or \"amd-sev-snp\""
-        ),
+        other => {
+            panic!("unknown TEE_PLATFORM={other:?}; expected \"placeholder\" or \"amd-sev-snp\"")
+        }
     }
 }
 

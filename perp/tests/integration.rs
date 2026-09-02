@@ -56,8 +56,5 @@ fn close_flip_realizes_and_reopens_long() {
     assert_eq!(p.size, 1_000_000);
     assert_eq!(p.entry_price, 58_000_000_000);
     assert_eq!(p.realized_pnl_micro_usdc, 2_000_000_000);
-    assert_eq!(
-        unrealized_pnl_micro_usdc(&p, 60_000_000_000),
-        2_000_000_000
-    );
+    assert_eq!(unrealized_pnl_micro_usdc(&p, 60_000_000_000), 2_000_000_000);
 }

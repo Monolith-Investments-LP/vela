@@ -316,8 +316,7 @@ async fn handle_message(
                 decryption_proof: None,
             };
             if state.order_tx.send(channel_item).await.is_err() {
-                crate::ORDER_CHANNEL_SEND_FAILURES
-                    .fetch_add(1, Ordering::Relaxed);
+                crate::ORDER_CHANNEL_SEND_FAILURES.fetch_add(1, Ordering::Relaxed);
                 send_reject_exec_report(
                     sock,
                     session,
@@ -331,40 +330,36 @@ async fn handle_message(
                 return Ok(());
             }
 
-            let responses = match tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                resp_rx,
-            )
-            .await
-            {
-                Ok(Ok(r)) => r,
-                Ok(Err(_)) => {
-                    send_reject_exec_report(
-                        sock,
-                        session,
-                        &cl_ord_id,
-                        &symbol,
-                        side_c,
-                        &req_qty_str,
-                        "engine error",
-                    )
-                    .await?;
-                    return Ok(());
-                }
-                Err(_) => {
-                    send_reject_exec_report(
-                        sock,
-                        session,
-                        &cl_ord_id,
-                        &symbol,
-                        side_c,
-                        &req_qty_str,
-                        "engine dispatch timed out",
-                    )
-                    .await?;
-                    return Ok(());
-                }
-            };
+            let responses =
+                match tokio::time::timeout(std::time::Duration::from_secs(5), resp_rx).await {
+                    Ok(Ok(r)) => r,
+                    Ok(Err(_)) => {
+                        send_reject_exec_report(
+                            sock,
+                            session,
+                            &cl_ord_id,
+                            &symbol,
+                            side_c,
+                            &req_qty_str,
+                            "engine error",
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                    Err(_) => {
+                        send_reject_exec_report(
+                            sock,
+                            session,
+                            &cl_ord_id,
+                            &symbol,
+                            side_c,
+                            &req_qty_str,
+                            "engine dispatch timed out",
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                };
 
             // Extract the OrderPosted + any fills produced.
             let posted = responses.iter().find_map(|r| match r {
@@ -440,7 +435,7 @@ async fn handle_message(
                     order_id: &engine_order_id,
                     cl_ord_id: &cl_ord_id,
                     exec_id: &exec_id,
-                    exec_type: 'F', // Trade
+                    exec_type: 'F',  // Trade
                     ord_status: '1', // PartiallyFilled — final status stamped below
                     symbol: &symbol,
                     side: side_c,
@@ -587,10 +582,7 @@ fn engine_status_to_fix(status: EngineOrderStatus, had_fills: bool) -> (char, ch
     }
 }
 
-fn parsed_leaves_qty(
-    responses: &[EngineResponse],
-    posted: &types::OrderPostedResponse,
-) -> u64 {
+fn parsed_leaves_qty(responses: &[EngineResponse], posted: &types::OrderPostedResponse) -> u64 {
     // Sum fills against this order and subtract from requested qty.
     // The engine already tracks filled_quantity, but responses only
     // carry Fill records — so we recompute here for wire fidelity.
@@ -598,8 +590,7 @@ fn parsed_leaves_qty(
         .iter()
         .filter_map(|r| match r {
             EngineResponse::OrderFilled(f)
-                if f.taker_order_id == posted.order_id
-                    || f.maker_order_id == posted.order_id =>
+                if f.taker_order_id == posted.order_id || f.maker_order_id == posted.order_id =>
             {
                 Some(f.quantity)
             }

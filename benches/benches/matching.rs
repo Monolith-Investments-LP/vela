@@ -756,6 +756,7 @@ fn bench_component_breakdown(c: &mut Criterion) {
             ref_by: None,
             ref_earnings: 0,
             referred_users: vec![],
+            fee_tier: 0,
         };
         // Fill the nonce window to simulate steady-state.
         for i in 1..=20u64 {
@@ -796,6 +797,7 @@ fn bench_component_breakdown(c: &mut Criterion) {
                 ref_by: None,
                 ref_earnings: 0,
                 referred_users: vec![],
+                fee_tier: 0,
             }));
             cow.commit(
                 &mut balances,

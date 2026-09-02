@@ -77,7 +77,12 @@ pub fn parse_new_order_single(msg: &FixMessage) -> Result<ParsedNewOrder, FixAda
     let side = match side_c {
         '1' => OrderSide::Bid, // Buy
         '2' => OrderSide::Ask, // Sell
-        c => return Err(FixAdapterError::InvalidTag(tag::SIDE, format!("side {c:?}"))),
+        c => {
+            return Err(FixAdapterError::InvalidTag(
+                tag::SIDE,
+                format!("side {c:?}"),
+            ))
+        }
     };
 
     let ord_type_c = msg
@@ -243,7 +248,10 @@ mod tests {
                 (tag::ORDER_QTY, "1"),
                 (tag::ACCOUNT, "0x0000000000000000000000000000000000000abc"),
             ]);
-            assert_eq!(parse_new_order_single(&msg).unwrap().request.order_type, expected);
+            assert_eq!(
+                parse_new_order_single(&msg).unwrap().request.order_type,
+                expected
+            );
         }
     }
 

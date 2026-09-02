@@ -376,9 +376,7 @@ pub fn provider_from_env() -> ProverKind {
     match raw.to_ascii_lowercase().as_str() {
         "sp1" => ProverKind::Sp1,
         "placeholder" | "" => ProverKind::Placeholder,
-        other => panic!(
-            "unknown ZKVM_PROVIDER={other:?}; expected \"placeholder\" or \"sp1\""
-        ),
+        other => panic!("unknown ZKVM_PROVIDER={other:?}; expected \"placeholder\" or \"sp1\""),
     }
 }
 
@@ -431,9 +429,7 @@ pub fn verifier_from_env() -> std::sync::Arc<dyn ZkVerifier> {
     match kind {
         ProverKind::Placeholder => {
             if prod {
-                panic!(
-                    "ENVIRONMENT=production forbids ZKVM_PROVIDER=placeholder verifier."
-                );
+                panic!("ENVIRONMENT=production forbids ZKVM_PROVIDER=placeholder verifier.");
             }
             std::sync::Arc::new(PlaceholderVerifier)
         }

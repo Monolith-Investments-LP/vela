@@ -474,8 +474,8 @@ pub async fn liquidate_handler(
     // Close-factor: liquidator may close up to 50% of |size|. Sign is
     // opposite of the borrower's current side so the closing fill
     // realizes P&L against the mark.
-    let close_abs = (pre_size.unsigned_abs() as u128 * LIQUIDATION_CLOSE_FACTOR_BPS
-        / 10_000u128) as i128;
+    let close_abs =
+        (pre_size.unsigned_abs() as u128 * LIQUIDATION_CLOSE_FACTOR_BPS / 10_000u128) as i128;
     if close_abs == 0 {
         return (
             StatusCode::CONFLICT,
@@ -557,8 +557,7 @@ pub async fn run_liquidation_watcher(state: Arc<AppState>) {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let market_ids: Vec<String> =
-            state.perp.markets.iter().map(|e| e.key().clone()).collect();
+        let market_ids: Vec<String> = state.perp.markets.iter().map(|e| e.key().clone()).collect();
         for id in &market_ids {
             if let Some(mut m) = state.perp.markets.get_mut(id) {
                 accrue_funding(&mut m, now_ms);

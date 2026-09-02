@@ -15,13 +15,15 @@ COPY committer/Cargo.toml     committer/Cargo.toml
 COPY committee/Cargo.toml     committee/Cargo.toml
 COPY tee/Cargo.toml           tee/Cargo.toml
 COPY zkvm/Cargo.toml          zkvm/Cargo.toml
+COPY perp/Cargo.toml          perp/Cargo.toml
+COPY fix/Cargo.toml           fix/Cargo.toml
 COPY benches/Cargo.toml       benches/Cargo.toml
-RUN mkdir -p api/src engine/src state/src types/src committer/src committee/src tee/src zkvm/src benches/benches \
+RUN mkdir -p api/src engine/src state/src types/src committer/src committee/src tee/src zkvm/src perp/src fix/src benches/benches \
     && echo 'fn main() {}' > api/src/main.rs \
-    && for d in engine state types committer committee tee zkvm; do echo '' > $d/src/lib.rs; done \
+    && for d in engine state types committer committee tee zkvm perp fix; do echo '' > $d/src/lib.rs; done \
     && echo 'fn main() {}' > benches/benches/matching.rs \
     && cargo build --release --bin api || true \
-    && rm -rf api engine state types committer committee tee zkvm benches
+    && rm -rf api engine state types committer committee tee zkvm perp fix benches
 
 # Now copy the real source and build for real.
 COPY . .

@@ -557,11 +557,7 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
             bound, batch_size_bucket_counts[i]
         );
     }
-    let _ = writeln!(
-        out,
-        "vela_batch_size_bucket{{le=\"+Inf\"}} {}",
-        batch_count
-    );
+    let _ = writeln!(out, "vela_batch_size_bucket{{le=\"+Inf\"}} {}", batch_count);
     let _ = writeln!(out, "vela_batch_size_sum {}", batch_size_sum);
     let _ = writeln!(out, "vela_batch_size_count {}", batch_count);
 
@@ -654,10 +650,8 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
     // Verifiability posture: whether the running binary is emitting real
     // proofs / real attestations, or the placeholders. Grafana can
     // alert if either drops to "placeholder" in a prod deployment.
-    let zk_provider =
-        std::env::var("ZKVM_PROVIDER").unwrap_or_else(|_| "placeholder".to_string());
-    let tee_platform =
-        std::env::var("TEE_PLATFORM").unwrap_or_else(|_| "placeholder".to_string());
+    let zk_provider = std::env::var("ZKVM_PROVIDER").unwrap_or_else(|_| "placeholder".to_string());
+    let tee_platform = std::env::var("TEE_PLATFORM").unwrap_or_else(|_| "placeholder".to_string());
     let _ = writeln!(
         out,
         "# HELP vela_verifiability_provider 1 if the given provider is active, 0 otherwise."

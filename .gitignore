@@ -30,3 +30,6 @@ __pycache__/
 # Local-only planning docs; never pushed.
 BUILDPLAN.md
 PAPER_REVISION_INPUTS.md
+
+# Agent worktrees created by Claude sessions — never track.
+.claude/

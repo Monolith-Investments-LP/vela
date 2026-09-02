@@ -46,7 +46,18 @@ pub fn openapi_spec() -> serde_json::Value {
             "/markets": {
                 "get": {
                     "summary": "List all markets",
-                    "responses": { "200": { "description": "Markets with best bid/ask/spread" } }
+                    "responses": {
+                        "200": {
+                            "description": "Markets with best bid/ask/spread",
+                            "content": { "application/json": { "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "ok": { "type": "boolean" },
+                                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/MarketResponse" } }
+                                }
+                            } } }
+                        }
+                    }
                 }
             },
             "/markets/{market}/book": {
@@ -121,7 +132,151 @@ pub fn openapi_spec() -> serde_json::Value {
                 "get": {
                     "summary": "Balances by asset",
                     "parameters": [{ "name": "address", "in": "path", "required": true, "schema": { "type": "string" } }],
-                    "responses": { "200": { "description": "Balances" } }
+                    "responses": {
+                        "200": {
+                            "description": "Balances",
+                            "content": { "application/json": { "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "ok": { "type": "boolean" },
+                                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/BalanceResponse" } }
+                                }
+                            } } }
+                        }
+                    }
+                }
+            },
+            "/perp/markets": {
+                "get": {
+                    "summary": "Perp market state (mark/index/funding)",
+                    "responses": {
+                        "200": {
+                            "description": "Perp markets",
+                            "content": { "application/json": { "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "ok": { "type": "boolean" },
+                                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/PerpMarket" } }
+                                }
+                            } } }
+                        }
+                    }
+                }
+            },
+            "/perp/account/{address}": {
+                "get": {
+                    "summary": "Perp positions + margin report for one address",
+                    "parameters": [{ "name": "address", "in": "path", "required": true, "schema": { "type": "string" } }],
+                    "responses": {
+                        "200": {
+                            "description": "Perp account",
+                            "content": { "application/json": { "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "ok": { "type": "boolean" },
+                                    "data": { "$ref": "#/components/schemas/PerpAccount" }
+                                }
+                            } } }
+                        }
+                    }
+                }
+            },
+            "/perp/liquidatable": {
+                "get": {
+                    "summary": "Positions below maintenance margin (eligible for public liquidator)",
+                    "responses": {
+                        "200": {
+                            "description": "Candidates",
+                            "content": { "application/json": { "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "ok": { "type": "boolean" },
+                                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/PerpLiquidationCandidate" } }
+                                }
+                            } } }
+                        }
+                    }
+                }
+            },
+            "/perp/liquidate": {
+                "post": {
+                    "summary": "Execute a public perp liquidation",
+                    "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PerpLiquidateBody" } } } },
+                    "responses": {
+                        "200": { "description": "Liquidation applied" },
+                        "401": { "description": "Signature invalid" },
+                        "404": { "description": "Unknown market" },
+                        "409": { "description": "Borrower not liquidatable / no open position" }
+                    }
+                }
+            },
+            "/borrow-lend/markets": {
+                "get": {
+                    "summary": "Borrow-lend market state",
+                    "responses": {
+                        "200": {
+                            "description": "Markets",
+                            "content": { "application/json": { "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "ok": { "type": "boolean" },
+                                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/BorrowLendMarket" } }
+                                }
+                            } } }
+                        }
+                    }
+                }
+            },
+            "/borrow-lend/account/{address}": {
+                "get": {
+                    "summary": "Borrow-lend positions + health factor",
+                    "parameters": [{ "name": "address", "in": "path", "required": true, "schema": { "type": "string" } }],
+                    "responses": {
+                        "200": {
+                            "description": "Account",
+                            "content": { "application/json": { "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "ok": { "type": "boolean" },
+                                    "data": { "$ref": "#/components/schemas/BorrowLendAccount" }
+                                }
+                            } } }
+                        }
+                    }
+                }
+            },
+            "/tee/stats": {
+                "get": {
+                    "summary": "TEE attestation counts + platform label",
+                    "responses": {
+                        "200": {
+                            "description": "TEE stats",
+                            "content": { "application/json": { "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "ok": { "type": "boolean" },
+                                    "data": { "$ref": "#/components/schemas/TeeStats" }
+                                }
+                            } } }
+                        }
+                    }
+                }
+            },
+            "/proofs/stats": {
+                "get": {
+                    "summary": "ZK proof counts + provider label",
+                    "responses": {
+                        "200": {
+                            "description": "Proof stats",
+                            "content": { "application/json": { "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "ok": { "type": "boolean" },
+                                    "data": { "$ref": "#/components/schemas/ProofStats" }
+                                }
+                            } } }
+                        }
+                    }
                 }
             },
             "/account/{address}/orders": {
@@ -138,7 +293,18 @@ pub fn openapi_spec() -> serde_json::Value {
                         { "name": "address", "in": "path", "required": true, "schema": { "type": "string" } },
                         { "name": "method", "in": "query", "required": false, "schema": { "type": "string", "enum": ["fifo", "hifo"] } }
                     ],
-                    "responses": { "200": { "description": "Portfolio breakdown" } }
+                    "responses": {
+                        "200": {
+                            "description": "Portfolio breakdown",
+                            "content": { "application/json": { "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "ok": { "type": "boolean" },
+                                    "data": { "$ref": "#/components/schemas/PortfolioResponse" }
+                                }
+                            } } }
+                        }
+                    }
                 }
             },
             "/portfolio/{address}/csv": {
@@ -239,6 +405,15 @@ pub fn openapi_spec() -> serde_json::Value {
         },
         "components": {
             "schemas": {
+                "ApiResponse": {
+                    "type": "object",
+                    "required": ["ok"],
+                    "properties": {
+                        "ok": { "type": "boolean" },
+                        "data": {},
+                        "error": { "type": "string" }
+                    }
+                },
                 "PostOrderBody": {
                     "type": "object",
                     "required": ["address", "market", "side", "order_type", "price", "quantity", "nonce", "signature"],
@@ -278,6 +453,263 @@ pub fn openapi_spec() -> serde_json::Value {
                         "slices": { "type": "integer", "default": 12 },
                         "nonce": { "type": "integer" },
                         "signature": { "type": "string" }
+                    }
+                },
+                "MarketResponse": {
+                    "type": "object",
+                    "required": ["id", "base", "quote"],
+                    "properties": {
+                        "id": { "type": "string", "example": "BTC-USDC" },
+                        "base": { "type": "string" },
+                        "quote": { "type": "string" },
+                        "best_bid": { "type": "string" },
+                        "best_ask": { "type": "string" },
+                        "spread": { "type": "string" }
+                    }
+                },
+                "BalanceResponse": {
+                    "type": "object",
+                    "required": ["asset", "available", "locked", "total"],
+                    "properties": {
+                        "asset": { "type": "string" },
+                        "available": { "type": "string" },
+                        "locked": { "type": "string" },
+                        "total": { "type": "string" }
+                    }
+                },
+                "PortfolioLot": {
+                    "type": "object",
+                    "required": ["asset", "quantity", "cost_basis_usdc", "acquired_at"],
+                    "properties": {
+                        "asset": { "type": "string" },
+                        "quantity": { "type": "string" },
+                        "cost_basis_usdc": { "type": "string", "description": "µUSDC" },
+                        "acquired_at": { "type": "integer", "description": "Unix seconds" }
+                    }
+                },
+                "PortfolioPerMarket": {
+                    "type": "object",
+                    "required": ["market", "realized_usdc", "unrealized_usdc"],
+                    "properties": {
+                        "market": { "type": "string" },
+                        "realized_usdc": { "type": "string" },
+                        "unrealized_usdc": { "type": "string" }
+                    }
+                },
+                "PortfolioResponse": {
+                    "type": "object",
+                    "required": [
+                        "address",
+                        "realized_pnl_usdc",
+                        "unrealized_pnl_usdc",
+                        "cost_basis_method",
+                        "tax_lots",
+                        "per_market"
+                    ],
+                    "properties": {
+                        "address": { "type": "string" },
+                        "realized_pnl_usdc": { "type": "string" },
+                        "unrealized_pnl_usdc": { "type": "string" },
+                        "cost_basis_method": { "type": "string", "enum": ["FIFO", "HIFO"] },
+                        "tax_lots": { "type": "array", "items": { "$ref": "#/components/schemas/PortfolioLot" } },
+                        "per_market": { "type": "array", "items": { "$ref": "#/components/schemas/PortfolioPerMarket" } }
+                    }
+                },
+                "PerpMarket": {
+                    "type": "object",
+                    "required": [
+                        "market",
+                        "mark_price_micro_usdc",
+                        "index_price_micro_usdc",
+                        "funding_index",
+                        "funding_rate_bps_per_hour",
+                        "gross_open_interest",
+                        "net_open_interest",
+                        "initial_margin_bps",
+                        "maintenance_margin_bps",
+                        "max_leverage"
+                    ],
+                    "properties": {
+                        "market": { "type": "string", "example": "BTC-PERP" },
+                        "mark_price_micro_usdc": { "type": "integer" },
+                        "index_price_micro_usdc": { "type": "integer" },
+                        "funding_index": { "type": "integer" },
+                        "funding_rate_bps_per_hour": { "type": "integer" },
+                        "gross_open_interest": { "type": "integer" },
+                        "net_open_interest": { "type": "integer" },
+                        "initial_margin_bps": { "type": "integer" },
+                        "maintenance_margin_bps": { "type": "integer" },
+                        "max_leverage": { "type": "integer" }
+                    }
+                },
+                "PerpPosition": {
+                    "type": "object",
+                    "required": [
+                        "market",
+                        "size",
+                        "entry_price_micro_usdc",
+                        "realized_pnl_micro_usdc",
+                        "notional_micro_usdc",
+                        "unrealized_pnl_micro_usdc",
+                        "initial_requirement_micro_usdc",
+                        "maintenance_requirement_micro_usdc",
+                        "mark_price_micro_usdc"
+                    ],
+                    "properties": {
+                        "market": { "type": "string" },
+                        "size": { "type": "string", "description": "Signed size, base × 1e6 (positive = long)" },
+                        "entry_price_micro_usdc": { "type": "integer" },
+                        "realized_pnl_micro_usdc": { "type": "string" },
+                        "notional_micro_usdc": { "type": "string" },
+                        "unrealized_pnl_micro_usdc": { "type": "string" },
+                        "initial_requirement_micro_usdc": { "type": "string" },
+                        "maintenance_requirement_micro_usdc": { "type": "string" },
+                        "mark_price_micro_usdc": { "type": "integer" }
+                    }
+                },
+                "PerpAccount": {
+                    "type": "object",
+                    "required": ["user", "positions"],
+                    "properties": {
+                        "user": { "type": "string" },
+                        "positions": { "type": "array", "items": { "$ref": "#/components/schemas/PerpPosition" } }
+                    }
+                },
+                "PerpLiquidationCandidate": {
+                    "type": "object",
+                    "required": [
+                        "user",
+                        "market",
+                        "size",
+                        "entry_price_micro_usdc",
+                        "mark_price_micro_usdc",
+                        "notional_micro_usdc",
+                        "maintenance_requirement_micro_usdc",
+                        "equity_micro_usdc"
+                    ],
+                    "properties": {
+                        "user": { "type": "string" },
+                        "market": { "type": "string" },
+                        "size": { "type": "string" },
+                        "entry_price_micro_usdc": { "type": "integer" },
+                        "mark_price_micro_usdc": { "type": "integer" },
+                        "notional_micro_usdc": { "type": "string" },
+                        "maintenance_requirement_micro_usdc": { "type": "string" },
+                        "equity_micro_usdc": { "type": "string" }
+                    }
+                },
+                "PerpLiquidateBody": {
+                    "type": "object",
+                    "required": ["liquidator", "signature", "borrower", "market", "nonce"],
+                    "properties": {
+                        "liquidator": { "type": "string" },
+                        "signature": { "type": "string" },
+                        "borrower": { "type": "string" },
+                        "market": { "type": "string" },
+                        "nonce": { "type": "integer" }
+                    }
+                },
+                "BorrowLendMarket": {
+                    "type": "object",
+                    "required": [
+                        "asset",
+                        "total_supply",
+                        "total_borrows",
+                        "utilization_bps",
+                        "borrow_rate_apr_bps",
+                        "supply_rate_apr_bps",
+                        "collateral_factor_bps",
+                        "liquidation_bonus_bps",
+                        "price_micro_usdc"
+                    ],
+                    "properties": {
+                        "asset": { "type": "string" },
+                        "total_supply": { "type": "string" },
+                        "total_borrows": { "type": "string" },
+                        "utilization_bps": { "type": "integer" },
+                        "borrow_rate_apr_bps": { "type": "integer" },
+                        "supply_rate_apr_bps": { "type": "integer" },
+                        "collateral_factor_bps": { "type": "integer" },
+                        "liquidation_bonus_bps": { "type": "integer" },
+                        "price_micro_usdc": { "type": "integer" }
+                    }
+                },
+                "BorrowLendPosition": {
+                    "type": "object",
+                    "required": [
+                        "asset",
+                        "supply_native",
+                        "borrow_native",
+                        "supply_value_micro_usdc",
+                        "borrow_value_micro_usdc"
+                    ],
+                    "properties": {
+                        "asset": { "type": "string" },
+                        "supply_native": { "type": "string" },
+                        "borrow_native": { "type": "string" },
+                        "supply_value_micro_usdc": { "type": "string" },
+                        "borrow_value_micro_usdc": { "type": "string" }
+                    }
+                },
+                "BorrowLendAccount": {
+                    "type": "object",
+                    "required": [
+                        "user",
+                        "positions",
+                        "borrowing_power_micro_usdc",
+                        "total_borrow_value_micro_usdc",
+                        "health_factor_bps"
+                    ],
+                    "properties": {
+                        "user": { "type": "string" },
+                        "positions": { "type": "array", "items": { "$ref": "#/components/schemas/BorrowLendPosition" } },
+                        "borrowing_power_micro_usdc": { "type": "string" },
+                        "total_borrow_value_micro_usdc": { "type": "string" },
+                        "health_factor_bps": { "type": "string" }
+                    }
+                },
+                "TeeStats": {
+                    "type": "object",
+                    "required": [
+                        "total_batches",
+                        "attested",
+                        "simulated",
+                        "pending",
+                        "failed",
+                        "platform",
+                        "binary_hash",
+                        "platform_status"
+                    ],
+                    "properties": {
+                        "total_batches": { "type": "integer" },
+                        "attested": { "type": "integer" },
+                        "simulated": { "type": "integer" },
+                        "pending": { "type": "integer" },
+                        "failed": { "type": "integer" },
+                        "platform": { "type": "string" },
+                        "binary_hash": { "type": "string" },
+                        "platform_status": { "type": "string" }
+                    }
+                },
+                "ProofStats": {
+                    "type": "object",
+                    "required": ["total", "proven", "pending", "skipped", "failed", "provider"],
+                    "properties": {
+                        "total": { "type": "integer" },
+                        "proven": { "type": "integer" },
+                        "pending": { "type": "integer" },
+                        "skipped": { "type": "integer" },
+                        "failed": { "type": "integer" },
+                        "provider": { "type": "string" }
+                    }
+                },
+                "OraclePriceEntry": {
+                    "type": "object",
+                    "required": ["asset", "price_micro_usdc", "timestamp_ms"],
+                    "properties": {
+                        "asset": { "type": "string" },
+                        "price_micro_usdc": { "type": "integer" },
+                        "timestamp_ms": { "type": "integer" }
                     }
                 }
             }
