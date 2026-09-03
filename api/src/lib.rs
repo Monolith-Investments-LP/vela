@@ -4,12 +4,19 @@
 // Silence a handful of stylistic clippy lints that fire on inherited
 // code across this crate. These aren't bug-worthy — trimming the list
 // is a cleanup pass, not a blocker on shipping the audit hardening.
+// Tolerate lint names that exist in newer clippy but not older
+// versions; otherwise a lint that ships with `clippy 1.98` errors on a
+// dev machine running `clippy 1.94`.
+#![allow(unknown_lints)]
 #![allow(
     clippy::too_many_arguments,
     clippy::doc_lazy_continuation,
     clippy::let_and_return,
     clippy::derivable_impls,
-    clippy::manual_contains
+    clippy::manual_contains,
+    // Newer clippy (>= 1.98) categories that fire on inherited code.
+    clippy::manual_checked_division,
+    clippy::unnecessary_sort_by
 )]
 
 pub mod agent_schema;
