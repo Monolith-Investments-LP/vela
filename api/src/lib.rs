@@ -15,7 +15,7 @@
     clippy::derivable_impls,
     clippy::manual_contains,
     // Newer clippy (>= 1.98) categories that fire on inherited code.
-    clippy::manual_checked_division,
+    clippy::manual_checked_ops,
     clippy::unnecessary_sort_by
 )]
 
